@@ -214,13 +214,16 @@ void Weather::SendWeatherUpdateToPlayer(Player* player)
     NormalizeGrade();
 
 #if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_7_1
-    WorldPacket data(SMSG_WEATHER, 4 + 4 + 4 + 1);
-    data << uint32(m_type);
-    data << float(m_grade);
-    data << uint32(GetSound()); // 1.12 soundid
-    data << uint8(0);           // 1 = instant change, 0 = smooth change
-
-    player->GetSession()->SendPacket(&data);
+    auto packet = std::make_unique<WorldPackets::Misc::WeatherUpdate>();
+    packet->weatherType = m_type;
+    packet->grade = m_grade;
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_8_4
+    packet->soundId = GetSound();
+#endif
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_9_4
+    packet->instantChange = false;
+#endif
+    player->GetSession()->SendPacket(std::move(packet));
 #endif
 }
 
@@ -233,9 +236,12 @@ bool Weather::SendWeatherForPlayersInZone(Map const* _map)
     WorldPacket data(SMSG_WEATHER, 4 + 4 + 4 + 1);
     data << uint32(m_type);
     data << float(m_grade);
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_8_4
     data << uint32(GetSound()); // 1.12 soundid
+#endif
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_9_4
     data << uint8(0);           // 1 = instant change, 0 = smooth change
-
+#endif
     // Send the weather packet to all players in this zone
     if (!_map->SendToPlayersInZone(&data, m_zone))
         return false;

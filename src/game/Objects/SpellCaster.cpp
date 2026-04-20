@@ -174,10 +174,11 @@ SpellMissInfo SpellCaster::SpellHitResult(Unit* pVictim, SpellEntry const* spell
     // World of Warcraft Client Patch 1.7.0 (2005-09-13)
     // - Effects that make players immune to physical will no longer be immune
     //   to the "Recently Bandaged" effect from First Aid.
-    if (/* pVictim != this && */ /* commented out due to above patch notes */
-        !spell->HasAttribute(SPELL_ATTR_NO_IMMUNITIES) &&
-        pVictim->IsImmuneToSpell(spell, pVictim == this))
+    if (pVictim->IsImmuneToSpell(spell, pVictim == this))
         return SPELL_MISS_IMMUNE;
+
+    if (pVictim == this)
+        return SPELL_MISS_NONE;
 
     // All positive spells can`t miss
     // TODO: client not show miss log for this spells - so need find info for this in dbc and use it!
@@ -191,7 +192,7 @@ SpellMissInfo SpellCaster::SpellHitResult(Unit* pVictim, SpellEntry const* spell
     else
         schoolMask = spell->GetSpellSchoolMask();
 
-    if (pVictim != this && pVictim->IsImmuneToDamage(schoolMask, spell))
+    if (pVictim->IsImmuneToDamage(schoolMask, spell))
         return SPELL_MISS_IMMUNE;
 
     // Try victim reflect spell
@@ -379,10 +380,6 @@ SpellMissInfo SpellCaster::MeleeSpellHitResult(Unit const* pVictim, SpellEntry c
 {
     WeaponAttackType attType = spell->DmgClass == SPELL_DAMAGE_CLASS_RANGED ? RANGED_ATTACK : BASE_ATTACK;
 
-    // Warrior spell Execute (5308) should never dodge, miss, resist ... Only the trigger can (20647)
-    if (spell->IsFitToFamily<SPELLFAMILY_WARRIOR, CF_WARRIOR_EXECUTE>() && spell->Id != 20647)
-        return SPELL_MISS_NONE;
-
     // Hammer of Wrath should not use weapon skill, but Bloodthirst should.
     // bonus from skills is 0.04% per skill Diff
     int32 attackerWeaponSkill = (spell->rangeIndex == SPELL_RANGE_IDX_COMBAT || spell->EquippedItemClass == ITEM_CLASS_WEAPON) ?
@@ -555,6 +552,12 @@ int32 SpellCaster::MagicSpellHitChance(Unit const* pVictim, SpellEntry const* sp
         modHitChance = 96 - leveldif;
     else
         modHitChance = 94 - (leveldif - 2) * lchance;
+
+    // Miss chance due to level difference is capped according to tests on classic.
+    // Test: lvl 1 player casts Fireball on a lvl 60 player in a duel
+    // Result: 83 hits 284 resists, hit ratio of 22%
+    if (modHitChance < 22)
+        modHitChance = 22;
 
     // Spellmod from SPELLMOD_RESIST_MISS_CHANCE
     if (Unit* pUnit = ToUnit())
@@ -820,7 +823,9 @@ void SpellCaster::SendSpellNonMeleeDamageLog(SpellNonMeleeDamage const* log) con
     data << uint32(log->damage);                            // damage amount
     data << uint8(log->school);                             // damage school
     data << uint32(log->absorb);                            // AbsorbedDamage
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_5_1
     data << int32(log->resist);                             // resist
+#endif
     data << uint8(log->periodicLog);                        // if 1, then client show spell name (example: %s's ranged shot hit %s for %u school or %s suffers %u school damage from %s's spell_name
     data << uint8(false);                                   // unused
     data << uint32(log->blocked);                           // blocked
@@ -1039,7 +1044,7 @@ float SpellCaster::MeleeDamageBonusDone(Unit const* pVictim, float pdamage, Weap
     bool isWeaponDamageBasedSpell = !(spellProto && (damagetype == DOT || spellProto->HasEffect(SPELL_EFFECT_SCHOOL_DAMAGE)));
     Item* pWeapon          = GetTypeId() == TYPEID_PLAYER ? ((Player*)this)->GetWeaponForAttack(attType, true, false) : nullptr;
     uint32 creatureTypeMask = pVictim->GetCreatureTypeMask();
-    uint32 schoolMask       = spellProto ? spellProto->GetSpellSchoolMask() : GetMeleeDamageSchoolMask();
+    uint32 schoolMask = spell ? spell->m_spellSchoolMask : (spellProto ? spellProto->GetSpellSchoolMask() : GetMeleeDamageSchoolMask());
 
     // FLAT damage bonus auras
     // =======================
@@ -1089,6 +1094,9 @@ float SpellCaster::MeleeDamageBonusDone(Unit const* pVictim, float pdamage, Weap
     // ====================
     float DonePercent   = 1.0f;
 
+    if (!isWeaponDamageBasedSpell && GetTypeId() == TYPEID_UNIT && !(IsPet() && ((Creature*)this)->GetOwnerGuid().IsPlayer()))
+        DonePercent *= Creature::_GetSpellDamageMod(((Creature*)this)->GetCreatureInfo()->rank);
+
     // ..done pct, already included in weapon damage based spells
     if (pUnit && !isWeaponDamageBasedSpell)
     {
@@ -1107,7 +1115,7 @@ float SpellCaster::MeleeDamageBonusDone(Unit const* pVictim, float pdamage, Weap
     }
 
     // Pet happiness increases damage of Hunter pet melee spells
-    if (IsPet() && ((Pet*)this)->getPetType() == HUNTER_PET)
+    if (IsPet() && ((Pet*)this)->GetPetType() == HUNTER_PET)
     {
         if (Pet* pet = ((Pet*)this))
         {
@@ -1133,7 +1141,7 @@ float SpellCaster::MeleeDamageBonusDone(Unit const* pVictim, float pdamage, Weap
     if (!isWeaponDamageBasedSpell)
     {
         // apply ap bonus and benefit affected by spell power implicit coeffs and spell level penalties
-        DoneTotal = SpellBonusWithCoeffs(spellProto, effectIndex, DoneTotal, DoneFlat, APbonus, damagetype, true, this, spell);
+        DoneTotal = SpellBonusWithCoeffs(spellProto, effectIndex, DoneTotal, DoneFlat, damagetype, true, this, spell);
     }
     // weapon damage based spells
     else if (APbonus || DoneFlat)
@@ -1221,7 +1229,7 @@ float SpellCaster::SpellHealingBonusDone(Unit const* pVictim, SpellEntry const* 
         Unit::AuraList const& mOverrideClassScript = owner->GetAurasByType(SPELL_AURA_OVERRIDE_CLASS_SCRIPTS);
         for (const auto i : mOverrideClassScript)
         {
-            if (!i->isAffectedOnSpell(spellProto))
+            if (!i->IsAffectedOnSpell(spellProto))
                 continue;
             switch (i->GetModifier()->m_miscvalue)
             {
@@ -1241,7 +1249,7 @@ float SpellCaster::SpellHealingBonusDone(Unit const* pVictim, SpellEntry const* 
     float DoneAdvertisedBenefit  = SpellBaseHealingBonusDone(spellProto->GetSpellSchoolMask());
 
     // apply ap bonus and benefit affected by spell power implicit coeffs and spell level penalties
-    DoneTotal = SpellBonusWithCoeffs(spellProto, effectIndex, DoneTotal, DoneAdvertisedBenefit, 0, damagetype, true, this, spell);
+    DoneTotal = SpellBonusWithCoeffs(spellProto, effectIndex, DoneTotal, DoneAdvertisedBenefit, damagetype, true, this, spell);
 
     // use float as more appropriate for negative values and percent applying
     float heal = (healamount + DoneTotal * int32(stack)) * DoneTotalMod;
@@ -1317,7 +1325,7 @@ float SpellCaster::SpellDamageBonusDone(Unit const* pVictim, SpellEntry const* s
     Item* pWeapon = GetTypeId() == TYPEID_PLAYER ? ((Player*)this)->GetWeaponForAttack(BASE_ATTACK, true, false) : nullptr;
 
     // Creature damage
-    if (GetTypeId() == TYPEID_UNIT && !((Creature*)this)->IsPet())
+    if (GetTypeId() == TYPEID_UNIT && !(IsPet() && ((Creature*)this)->GetOwnerGuid().IsPlayer()))
         DoneTotalMod *= Creature::_GetSpellDamageMod(((Creature*)this)->GetCreatureInfo()->rank);
 
     if (pUnit)
@@ -1363,23 +1371,36 @@ float SpellCaster::SpellDamageBonusDone(Unit const* pVictim, SpellEntry const* s
         Unit::AuraList const& mOverrideClassScript = owner->GetAurasByType(SPELL_AURA_OVERRIDE_CLASS_SCRIPTS);
         for (const auto i : mOverrideClassScript)
         {
-            if (!i->isAffectedOnSpell(spellProto))
+            if (!i->IsAffectedOnSpell(spellProto))
                 continue;
             switch (i->GetModifier()->m_miscvalue)
             {
-            case 4418: // Increased Shock Damage
-            case 4554: // Increased Lightning Damage
-            case 4555: // Improved Moonfire
-            {
-                DoneTotal += i->GetModifier()->m_amount;
-                break;
-            }
+                case 4418: // Increased Shock Damage
+                case 4554: // Increased Lightning Damage
+                {
+                    DoneTotal += i->GetModifier()->m_amount;
+                    break;
+                }
+                case 4555: // Improved Moonfire (Idol of the moon)
+                {
+                    // Idol of the moon was bugged during vanilla 1.12
+                    // Following math is based on reported numbers from classic and an old post on allakhazam and wowhead classic
+                    // Direct damage bonus = 17/8 % and Dot damage bonus = 17/tickcount %
+                    // Further information and discussion can be found at vmangos PR #2802
+                    uint32 divisor = 800;
+                    if (damagetype == DOT)
+                    {
+                        divisor = 100 * spellProto->GetAuraMaxTicks();
+                    }
+
+                    DoneTotal += i->GetModifier()->m_amount * pdamage / divisor;
+                }
             }
         }
     }
 
     // Pet happiness increases damage of Hunter pet spells (e.g. Lightning Breath)
-    if (IsPet() && ((Pet*)this)->getPetType() == HUNTER_PET)
+    if (IsPet() && ((Pet*)this)->GetPetType() == HUNTER_PET)
     {
         if (Pet* pet = ((Pet*)this))
         {
@@ -1405,7 +1426,7 @@ float SpellCaster::SpellDamageBonusDone(Unit const* pVictim, SpellEntry const* s
         DoneAdvertisedBenefit += ((Pet*)this)->GetBonusDamage();
 
     // apply ap bonus and benefit affected by spell power implicit coeffs and spell level penalties
-    DoneTotal = SpellBonusWithCoeffs(spellProto, effectIndex, DoneTotal, DoneAdvertisedBenefit, 0, damagetype, true, this, spell);
+    DoneTotal = SpellBonusWithCoeffs(spellProto, effectIndex, DoneTotal, DoneAdvertisedBenefit, damagetype, true, this, spell);
 
     float tmpDamage = (pdamage + DoneTotal * int32(stack)) * DoneTotalMod;
     // apply spellmod to Done damage (flat and pct)
@@ -1452,7 +1473,7 @@ int32 SpellCaster::SpellBaseDamageBonusDone(SpellSchoolMask schoolMask)
     return DoneAdvertisedBenefit;
 }
 
-float SpellCaster::SpellBonusWithCoeffs(SpellEntry const* spellProto, SpellEffectIndex effectIndex, float total, float benefit, float ap_benefit,  DamageEffectType damagetype, bool donePart, SpellCaster const* pCaster, Spell* spell) const
+float SpellCaster::SpellBonusWithCoeffs(SpellEntry const* spellProto, SpellEffectIndex effectIndex, float total, float benefit, DamageEffectType damagetype, bool donePart, SpellCaster const* pCaster, Spell* spell) const
 {
     if (benefit)
     {
@@ -1660,7 +1681,7 @@ void SpellCaster::SetCurrentCastedSpell(Spell* pSpell)
                     InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
 
                 if (Unit* pUnit = ToUnit())
-                    pUnit->m_AutoRepeatFirstCast = true;
+                    pUnit->m_autoRepeatFirstCast = true;
             }
         }
         break;
@@ -1689,7 +1710,7 @@ void SpellCaster::SetCurrentCastedSpell(Spell* pSpell)
             }
             // special action: set first cast flag
             if (Unit* pUnit = ToUnit())
-                pUnit->m_AutoRepeatFirstCast = true;
+                pUnit->m_autoRepeatFirstCast = true;
         }
         break;
 

@@ -16,7 +16,10 @@
 
 using namespace Geometry;
 
-const char* GetMovementCheatName(CheatType flagId)
+float MovementAnticheat::m_wallSlope = 0.f;
+float MovementAnticheat::m_wallSlopeHigh = 0.f;
+
+char const* GetMovementCheatName(CheatType flagId)
 {
     switch (flagId)
     {
@@ -184,7 +187,7 @@ void MovementAnticheat::AddCheats(uint32 cheats, uint32 count)
         if (!cheatNames.empty())
         {
             if (sWorld.getConfig(CONFIG_BOOL_AC_MOVEMENT_NOTIFY_CHEATERS))
-                ChatHandler(m_session->GetPlayer()).PSendSysMessage("[AntiCheat] Detected cheats: %s", cheatNames.c_str());
+                m_session->GetPlayer()->PSendSysMessage("[AntiCheat] Detected cheats: %s", cheatNames.c_str());
 
             // Print detected cheats in place inside packet log.
             if (sWorld.getConfig(CONFIG_UINT32_AC_MOVEMENT_PACKET_LOG_SIZE))
@@ -208,7 +211,7 @@ uint32 MovementAnticheat::ComputeCheatAction(std::stringstream& reason)
     uint32 action = CHEAT_ACTION_NONE;
 
     auto AddPenaltyForCheat = [&action, &reason, this](bool total, CheatType cheatType, eConfigBoolValues enabledConfig, eConfigUInt32Values thresholdConfig, eConfigUInt32Values penaltyConfig)
-    { 
+    {
         if (sWorld.getConfig(enabledConfig))
         {
             ASSERT(cheatType < CHEATS_COUNT);
@@ -380,11 +383,13 @@ bool MovementAnticheat::IsLoggedOpcode(uint16 opcode)
         case CMSG_MOVE_WATER_WALK_ACK:
         case CMSG_SET_ACTIVE_MOVER:
         case CMSG_MOVE_NOT_ACTIVE_MOVER:
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_4_2
         case CMSG_MOVE_START_SWIM_CHEAT:
         case CMSG_MOVE_STOP_SWIM_CHEAT:
         case CMSG_FORCE_WALK_SPEED_CHANGE_ACK:
         case CMSG_FORCE_SWIM_BACK_SPEED_CHANGE_ACK:
         case CMSG_FORCE_TURN_RATE_CHANGE_ACK:
+#endif
 #if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_9_4
         case MSG_MOVE_TIME_SKIPPED:
 #endif
@@ -448,6 +453,13 @@ void MovementAnticheat::ResetJumpCounters()
     m_jumpCount = 0;
     m_jumpFlagCount = 0;
     m_jumpFlagTime = 0;
+}
+
+void MovementAnticheat::InitWallClimbLimits()
+{
+    float const A = sWorld.getConfig(CONFIG_FLOAT_AC_MOVEMENT_CHEAT_WALL_CLIMB_ANGLE);
+    m_wallSlope = tan(A);
+    m_wallSlopeHigh = tan(A + 0.2f);
 }
 
 void MovementAnticheat::OnKnockBack(Player* pPlayer, float speedxy, float speedz, float cos, float sin)
@@ -600,7 +612,7 @@ uint32 MovementAnticheat::HandlePositionTests(Player* pPlayer, MovementInfo& mov
         (sWorld.getConfig(CONFIG_BOOL_AC_MOVEMENT_PLAYERS_ONLY) && (m_session->GetSecurity() != SEC_PLAYER)) ||
         !pPlayer->movespline->Finalized())
         return 0;
-    
+
     if (pPlayer != me)
         InitNewPlayer(pPlayer);
 
@@ -672,7 +684,7 @@ uint32 MovementAnticheat::HandlePositionTests(Player* pPlayer, MovementInfo& mov
             cheatFlags |= flags;
     }
 
-    if (IsFallEndOpcode(opcode) || 
+    if (IsFallEndOpcode(opcode) ||
         movementInfo.HasMovementFlag(MOVEFLAG_ROOT))
         m_knockBack = false;
 
@@ -687,8 +699,8 @@ uint32 MovementAnticheat::HandlePositionTests(Player* pPlayer, MovementInfo& mov
         {
             me->m_movementInfo.moveFlags = movementInfo.moveFlags;
             me->m_movementInfo.CorrectData();
-        }     
-        
+        }
+
         if (HAS_CHEAT(CHEAT_TYPE_OVERSPEED_JUMP) &&
             sWorld.getConfig(CONFIG_BOOL_AC_MOVEMENT_CHEAT_OVERSPEED_JUMP_REJECT))
         {
@@ -723,7 +735,7 @@ uint32 MovementAnticheat::HandleFlagTests(Player* pPlayer, MovementInfo& movemen
     if (!sWorld.getConfig(CONFIG_BOOL_AC_MOVEMENT_ENABLED) ||
         (sWorld.getConfig(CONFIG_BOOL_AC_MOVEMENT_PLAYERS_ONLY) && (m_session->GetSecurity() != SEC_PLAYER)))
         return 0;
-    
+
     if (me != pPlayer)
         InitNewPlayer(pPlayer);
 
@@ -737,7 +749,7 @@ uint32 MovementAnticheat::HandleFlagTests(Player* pPlayer, MovementInfo& movemen
     if ((currentMoveFlags & MOVEFLAG_ROOT) &&
         !(GetLastMovementInfo().moveFlags & MOVEFLAG_ROOT) &&
         !me->HasPendingMovementChange(ROOT) &&
-        !me->HasUnitState(UNIT_STAT_ROOT | UNIT_STAT_PENDING_ROOT | UNIT_STAT_STUNNED | UNIT_STAT_PENDING_STUNNED | UNIT_STAT_ROOT_ON_LANDING) &&
+        !me->HasUnitState(UNIT_STATE_ROOT | UNIT_STATE_PENDING_ROOT | UNIT_STATE_STUNNED | UNIT_STATE_PENDING_STUNNED | UNIT_STATE_ROOT_ON_LANDING) &&
         (opcode != CMSG_FORCE_MOVE_ROOT_ACK))
     {
         APPEND_CHEAT(CHEAT_TYPE_SELF_ROOT);
@@ -812,19 +824,29 @@ uint32 MovementAnticheat::HandleFlagTests(Player* pPlayer, MovementInfo& movemen
     }
 #undef APPEND_CHEAT
 
-    AddCheats(cheatFlags);
-
-    if (ShouldRejectMovement(cheatFlags) &&
-        me->movespline->Finalized() &&
-       !me->IsBeingTeleported())
+    if (cheatFlags)
     {
-        me->RemoveUnitMovementFlag(removeMoveFlags);
-        me->ResolvePendingMovementChanges(true, true);
-        me->SendHeartBeat(true);
-        return WorldTimer::getMSTime() + 100 + std::min(1000u, sWorld.GetCurrentDiff() + m_session->GetLatency());
+        // Since we dont require client confirmation for flag changes
+        // during move splines, it's possible for client to not have
+        // yet processed the changes when the move spline expires.
+        // So just ignore this packet and dont send forced update.
+        if (opcode == CMSG_MOVE_SPLINE_DONE)
+            return 1;
+
+        AddCheats(cheatFlags);
+
+        if (ShouldRejectMovement(cheatFlags) &&
+            me->movespline->Finalized() &&
+            !me->IsBeingTeleported())
+        {
+            me->RemoveUnitMovementFlag(removeMoveFlags);
+            me->ResolvePendingMovementChanges(true, true);
+            me->SendHeartBeat(true);
+            return WorldTimer::getMSTime() + 100 + std::min(1000u, sWorld.GetCurrentDiff() + m_session->GetLatency());
+        }
+        else if (removeMoveFlags)
+            movementInfo.RemoveMovementFlag(removeMoveFlags);
     }
-    else if (removeMoveFlags)
-        movementInfo.RemoveMovementFlag(removeMoveFlags);
 
     return 0;
 }
@@ -921,7 +943,7 @@ bool MovementAnticheat::CheckFallReset(MovementInfo const& movementInfo) const
         if (!GetLastMovementInfo().HasMovementFlag(MOVEFLAG_JUMPING | MOVEFLAG_FALLINGFAR))
             return true;
     }
-    
+
     return movementInfo.fallTime != 0 || movementInfo.jump.zspeed != 0.0f;
 }
 
@@ -977,7 +999,7 @@ bool MovementAnticheat::CheckMoveStart(MovementInfo const& movementInfo, uint16 
            !GetLastMovementInfo().HasMovementFlag(MOVEFLAG_FORWARD))
             return true;
     }
-    
+
     if (opcode == MSG_MOVE_START_BACKWARD)
     {
         if (!movementInfo.HasMovementFlag(MOVEFLAG_BACKWARD))
@@ -1045,7 +1067,7 @@ bool MovementAnticheat::CheckMoveStart(MovementInfo const& movementInfo, uint16 
     }
     else
     {
-        
+
         if (movementInfo.HasMovementFlag(MOVEFLAG_SWIMMING) &&
            !GetLastMovementInfo().HasMovementFlag(MOVEFLAG_SWIMMING) &&
            !me->HasCheatOption(PLAYER_CHEAT_FLY))
@@ -1128,7 +1150,7 @@ bool MovementAnticheat::CheckMultiJump(uint16 opcode)
 }
 
 #define NO_WALL_CLIMB_CHECK_MOVE_FLAGS (MOVEFLAG_JUMPING | MOVEFLAG_FALLINGFAR | MOVEFLAG_SWIMMING | MOVEFLAG_FLYING | MOVEFLAG_PITCH_UP | MOVEFLAG_PITCH_DOWN | MOVEFLAG_ONTRANSPORT | MOVEFLAG_SPLINE_ELEVATION)
-#define NO_WALL_CLIMB_CHECK_UNIT_FLAGS (UNIT_FLAG_UNK_0 | UNIT_FLAG_DISABLE_MOVE | UNIT_FLAG_CONFUSED | UNIT_FLAG_FLEEING | UNIT_FLAG_POSSESSED)
+#define NO_WALL_CLIMB_CHECK_UNIT_FLAGS (UNIT_FLAG_SERVER_CONTROLLED | UNIT_FLAG_REMOVE_CLIENT_CONTROL | UNIT_FLAG_CONFUSED | UNIT_FLAG_FLEEING | UNIT_FLAG_POSSESSED)
 
 bool MovementAnticheat::CheckWallClimb(MovementInfo const& movementInfo, uint16 opcode) const
 {
@@ -1137,9 +1159,9 @@ bool MovementAnticheat::CheckWallClimb(MovementInfo const& movementInfo, uint16 
        (GetLastMovementInfo().moveFlags & NO_WALL_CLIMB_CHECK_MOVE_FLAGS) ||
        (movementInfo.moveFlags & NO_WALL_CLIMB_CHECK_MOVE_FLAGS) ||
        (me->HasFlag(UNIT_FIELD_FLAGS, NO_WALL_CLIMB_CHECK_UNIT_FLAGS)) ||
-        IsInKnockBack() || me->IsTaxiFlying() || !GetLastMovementInfo().ctime)
+       IsInKnockBack() || me->IsTaxiFlying() || !GetLastMovementInfo().ctime)
         return false;
-    
+
     float const deltaXY = GetDistance2D(GetLastMovementInfo().pos, movementInfo.pos);
     if (deltaXY < 0.5f)
         return false;
@@ -1148,20 +1170,25 @@ bool MovementAnticheat::CheckWallClimb(MovementInfo const& movementInfo, uint16 
     if (deltaZ < 1.0f)
         return false;
 
-    float const angleRad = atan(deltaZ / deltaXY);
-    //float const angleDeg = angleRad * (360 / (M_PI_F * 2));
 
-    float const maxClimbAngle = sWorld.getConfig(CONFIG_FLOAT_AC_MOVEMENT_CHEAT_WALL_CLIMB_ANGLE);
-    if (angleRad > maxClimbAngle)
+    if (deltaZ > m_wallSlope * deltaXY)
     {
-        if (angleRad > (maxClimbAngle + 0.2f))
+        if (deltaZ > m_wallSlopeHigh * deltaXY)
             return true;
 
         // check height with and without vmaps and compare
         // if player is stepping over model like stairs, that can increase wall climb angle
-        float const height1 = me->GetMap()->GetHeight(movementInfo.pos.x, movementInfo.pos.y, movementInfo.pos.z, false);
-        float const height2 = me->GetMap()->GetHeight(movementInfo.pos.x, movementInfo.pos.y, movementInfo.pos.z, true);
-        if (std::abs(height1 - height2) < 0.5f)
+
+        Map* map = me->GetMap();
+        TerrainInfo const* terrain = map->GetTerrain();
+
+        float const hDyn = map->GetDynamicTreeHeight(movementInfo.pos.x, movementInfo.pos.y, movementInfo.pos.z, DEFAULT_HEIGHT_SEARCH);
+        float const height1 = terrain->GetHeightStatic(movementInfo.pos.x, movementInfo.pos.y, movementInfo.pos.z, false, DEFAULT_HEIGHT_SEARCH);
+        float const height2 = terrain->GetHeightStatic(movementInfo.pos.x, movementInfo.pos.y, movementInfo.pos.z, true, DEFAULT_HEIGHT_SEARCH);
+        float const hNoVmap = std::max(height1, hDyn);
+        float const hVmap = std::max(height2, hDyn);
+
+        if (std::abs(hNoVmap - hVmap) < 0.5f)
             return true;
     }
 
@@ -1175,7 +1202,7 @@ bool MovementAnticheat::CheckForbiddenArea(MovementInfo const& movementInfo) con
 
     switch(me->GetMapId())
     {
-        case 30: // Alterac Valley
+        case MAP_ALTERAC_VALLEY: // Alterac Valley
         {
             if (BattleGround* bg = me->GetBattleGround())
             {
@@ -1190,7 +1217,7 @@ bool MovementAnticheat::CheckForbiddenArea(MovementInfo const& movementInfo) con
             }
             break;
         }
-        case 489: // Warsong Gulch
+        case MAP_WARSONG_GULCH: // Warsong Gulch
         {
             // Only way to get this high is with engineering items malfunction.
             if (!(movementInfo.moveFlags & (MOVEFLAG_FALLINGFAR | MOVEFLAG_JUMPING)) && movementInfo.pos.z > 380.0f)
@@ -1209,7 +1236,7 @@ bool MovementAnticheat::CheckForbiddenArea(MovementInfo const& movementInfo) con
             }
             break;
         }
-        case 529: // Arathi Basin
+        case MAP_ARATHI_BASIN: // Arathi Basin
         {
             if (BattleGround* bg = me->GetBattleGround())
             {
@@ -1235,7 +1262,7 @@ uint32 MovementAnticheat::CheckSpeedHack(MovementInfo const& movementInfo, uint1
         (opcode == CMSG_MOVE_SPLINE_DONE) ||
         IsInKnockBack() ||
         !GetLastMovementInfo().ctime ||
-        me->IsTaxiFlying() || 
+        me->IsTaxiFlying() ||
         me->IsBeingTeleported())
         return 0;
 
@@ -1452,7 +1479,7 @@ void MovementAnticheat::CheckBotting(uint16 opcode, MovementInfo const& movement
         // we store turns count here
         m_cheatOccuranceTotal[CHEAT_TYPE_BOTTING]++;
     }
-    
+
     m_movementPacketsCount++;
 }
 
@@ -1475,7 +1502,7 @@ bool MovementAnticheat::CheckTeleport(MovementInfo const& movementInfo) const
         float const distance2d = movementInfo.HasMovementFlag(MOVEFLAG_ONTRANSPORT) ?
             GetDistance2D(GetLastMovementInfo().t_pos, movementInfo.t_pos) :
             GetDistance2D(GetLastMovementInfo().pos, movementInfo.pos);
-        
+
         if (distance2d > 1.0f)
             return true;
 
@@ -1487,7 +1514,7 @@ bool MovementAnticheat::CheckTeleport(MovementInfo const& movementInfo) const
             float const distanceZ = movementInfo.HasMovementFlag(MOVEFLAG_ONTRANSPORT) ?
                 std::abs(GetLastMovementInfo().t_pos.z - movementInfo.t_pos.z) :
                 std::abs(GetLastMovementInfo().pos.z - movementInfo.pos.z);
-            
+
             if (distanceZ > 2.0f)
                 return true;
         }

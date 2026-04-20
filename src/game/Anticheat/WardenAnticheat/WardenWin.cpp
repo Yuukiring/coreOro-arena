@@ -28,22 +28,23 @@
 #include "WardenScan.hpp"
 #include "../Anticheat.h"
 #include "World.h"
-
-#include "Unit.h"
-#include "Chat.h"
 #include "WorldSession.h"
-#include "Auth/BigNumber.h"
-#include "Auth/HMACSHA1.h"
+#include "Util.h"
+#include "Log.h"
+#include "Crypto/BigNumber.h"
+#include "Crypto/Hash/HMACSHA1.h"
 #include "ByteBuffer.h"
 #include "Database/DatabaseEnv.h"
-#include "Player.h"
 #include "Progression.h"
+#include "Errors.h"
 
 #include <string>
 #include <vector>
 #include <memory>
 #include <sstream>
 #include <iomanip>
+
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_5_1
 
 namespace
 {
@@ -72,6 +73,7 @@ static constexpr struct ClientOffsets
 
     // EndScene memory scan
     uint32 g_theGxDevicePtr;
+    uint32 g_gxDevicePtr_OfsApiKind;
     uint32 OfsDevice2;
     uint32 OfsDevice3;
     uint32 OfsDevice4;
@@ -84,6 +86,29 @@ static constexpr struct ClientOffsets
     // Click to move
     uint32 ClickToMovePosition;
 } Offsets[] = {
+    // scanning does not work in versions before 1.8 so no point in defining offsets for them
+    {
+        4878,
+        0x2DB9D0,
+        0x21F580, 0x220610, 0x220280, 0x22B7D0,
+        0x226E0,
+        0xBEC94C,
+        0xC60AD0,
+        0xB804E0, 0x1FC, 0x3890, 0x0, 0xA8,
+        0xC598DC, 0x228, 0x08,
+        0xBBEFC8
+    },
+    {
+        5086,
+        0x2E82E0,
+        0x225FB0, 0x227070, 0x226CE0, 0x232170,
+        0x22580,
+        0xC01BBC,
+        0xC74844,
+        0xB95818, 0x1FC, 0x38A0, 0x0, 0xA8,
+        0xC6EBF4, 0x228, 0x08,
+        0xBD4260
+    },
     {
         5302,
         0x2F5CE0,
@@ -91,7 +116,7 @@ static constexpr struct ClientOffsets
         0x226A0,
         0xC213E4,
         0xC9470C,
-        0xBB4E98, 0x38A0, 0x0, 0xA8,
+        0xBB4E98, 0x1FC, 0x38A0, 0x0, 0xA8,
         0xC8E64C, 0x228, 0x08,
         0xBF3A94
     },
@@ -102,7 +127,7 @@ static constexpr struct ClientOffsets
         0x2BDF0,
         0xC6F4CC,
         0xCE4BD0,
-        0xC02F48, 0x38A8, 0x0, 0xA8,
+        0xC02F48, 0x1FC, 0x38A8, 0x0, 0xA8,
         0xCDCB8C, 0x228, 0x08,
         0xC41B44
     },
@@ -113,7 +138,7 @@ static constexpr struct ClientOffsets
         0x2C010,
         0xC7B2A4,
         0xCF0BC8,
-        0xC0ED38, 0x38A8, 0x0, 0xA8,
+        0xC0ED38, 0x1FC, 0x38A8, 0x0, 0xA8,
         0xCE897C, 0x228, 0x08,
         0xC4D890
     },
@@ -124,7 +149,7 @@ static constexpr struct ClientOffsets
         0x2C010,
         0xC7B2A4,
         0xCF0BC8,
-        0xC0ED38, 0x38A8, 0x0, 0xA8,
+        0xC0ED38, 0x1FC, 0x38A8, 0x0, 0xA8,
         0xCE897C, 0x228, 0x08,
         0xC4D890
     },
@@ -135,7 +160,7 @@ static constexpr struct ClientOffsets
         0x2C010,
         0xC7F9C4,
         0xCF52E8,
-        0xC133E0, 0x38A8, 0x0, 0xA8,
+        0xC133E0, 0x1FC, 0x38A8, 0x0, 0xA8,
         0xCED09C, 0x228, 0x08,
         0xC51FB0
     }
@@ -157,40 +182,40 @@ static auto constexpr HypervisorCount = sizeof(Hypervisors) / sizeof(Hypervisors
 
 enum WorldEnables
 {
-    TerrainDoodads                  = 0x1,              // default, toggled by sub at 0x673130, which is never called.  should always be set
-    Terrain                         = 0x2,              // default, toggled by sub at 0x6730F0, which is never called.  should always be set
+    TerrainDoodads                  = 0x1,              // default, showDoodads console command, toggled by sub at 0x673130, which is never called.  should always be set
+    Terrain                         = 0x2,              // default, showTerrain console command, toggled by sub at 0x6730F0, which is never called.  should always be set
     TerrainLOD                      = 0x4,              // lod console var
     Unk10                           = 0x10,             // default
     TerrainCulling                  = 0x20,             // default, showCull console command
     TerrainShadows                  = 0x40,             // default, mapShadows console var, showShadow console command
-    TerrainDoodadCollisionVisuals   = 0x80,             // toggled by sub at 0x6731C0, which is never called.  should never be set
-    MapObjects                      = 0x100,            // default, toggled by sub at 0x673430, which is never called.  should always be set
-    MapObjectLighting               = 0x200,            // default, toggled by sub at 0x673360, which is never called.  should always be set
+    TerrainDoodadCollisionVisuals   = 0x80,             // showCollision console command, toggled by sub at 0x6731C0, which is never called.  should never be set
+    MapObjects                      = 0x100,            // default, showMapObjs console command, toggled by sub at 0x673430, which is never called.  should always be set
+    MapObjectLighting               = 0x200,            // default, showMapObjLight console command, toggled by sub at 0x673360, which is never called.  should always be set
     FootPrints                      = 0x400,            // showfootprints console var
-    MapObjectTextures               = 0x800,            // default, toggled by sub at 0x6733A0, which is never called.  should always be set
-    PortalDisplay                   = 0x1000,           // toggled by sub at 0x673470, which is never called.  should never be set
-    PortalVisual                    = 0x2000,           // toggled by sub at 0x6734B0, which is never called.  should never be set
+    MapObjectTextures               = 0x800,            // default, showMapObjTex console command, toggled by sub at 0x6733A0, which is never called.  should always be set
+    PortalDisplay                   = 0x1000,           // showPortals console command, toggled by sub at 0x673470, which is never called.  should never be set
+    PortalVisual                    = 0x2000,           // portalVis console command, toggled by sub at 0x6734B0, which is never called.  should never be set
     DisableDoodadFullAlpha          = 0x4000,           // fullAlpha console var
     DoodadAnimation                 = 0x8000,           // doodadAnim console var
     TriangleStrips                  = 0x10000,          // triangleStrips console var
-    CrappyBatches                   = 0x20000,          // toggled by sub at 0x6733E0, which is never called.  should never be set
+    CrappyBatches                   = 0x20000,          // showCrappyBatches console command, toggled by sub at 0x6733E0, which is never called.  should never be set
     ZoneBoundaryVisuals             = 0x40000,          // zoneBoundary disabled console command (should never be set, also sends CMSG_ZONE_MAP, sub at 0x673850)
-    BSPRender                       = 0x80000,          // toggled by sub at 0x6730A0, which is never called.  should never be set
+    BSPRender                       = 0x80000,          // showMapObjBSP console command, toggled by sub at 0x6730A0, which is never called.  should never be set
     DetailDoodads                   = 0x100000,         // default, showDetailDoodads console command
     ShowQuery                       = 0x200000,         // showQuery disabled console command (should never be set)
-    TerrainDoodadAABoxVisuals       = 0x400000,         // toggled by sub at 0x673170, which is never called.  should never be set
+    TerrainDoodadAABoxVisuals       = 0x400000,         // showAABoxes console command, toggled by sub at 0x673170, which is never called.  should never be set
     TrilinearFiltering              = 0x800000,         // trilinear console var
-    Water                           = 0x1000000,        // default, toggled by sub at 0x673670, which is never called.  should always be set
+    Water                           = 0x1000000,        // default, showWater and waterShow console commands, toggled by sub at 0x673670, which is never called.  should always be set
     WaterParticulates               = 0x2000000,        // default, waterParticulates console command
     TerrainLowDetail                = 0x4000000,        // default, showLowDetail console command
     Specular                        = 0x8000000,        // specular console var
     PixelShaders                    = 0x10000000,       // pixelShaders console var
-    Unknown6737F9                   = 0x20000000,       // unknown, set by sub at 0x6737F0, should never be set
-    Unknown673820                   = 0x40000000,       // unknown, set by sub at 0x673820, should never be set
+    Tris                            = 0x20000000,       // showTris console command, set by sub at 0x6737F0, should never be set
+    Normals                         = 0x40000000,       // showNormals console command, set by sub at 0x673820, should never be set
     Anisotropic                     = 0x80000000,       // anisotropic console var
 
     Required = (TerrainDoodads|Terrain| MapObjects| MapObjectLighting| MapObjectTextures| Water),
-    Prohibited = (TerrainDoodadCollisionVisuals|CrappyBatches|ZoneBoundaryVisuals|BSPRender|ShowQuery|TerrainDoodadAABoxVisuals|Unknown6737F9|Unknown673820),
+    Prohibited = (TerrainDoodadCollisionVisuals|CrappyBatches|ZoneBoundaryVisuals|BSPRender|ShowQuery|TerrainDoodadAABoxVisuals|Tris|Normals),
 };
 
 ClientOffsets const* GetClientOffets(uint32 build)
@@ -744,11 +769,11 @@ void WardenWin::LoadScriptedScans()
 
             scan << opcode << seed;
 
-            HMACSHA1 hash(reinterpret_cast<uint8 const*>(&seed), sizeof(seed));
+            Crypto::Hash::HMACSHA1::Generator hash(reinterpret_cast<uint8 const*>(&seed), sizeof(seed));
             hash.UpdateData(hypervisor.DeviceName);
-            hash.Finalize();
+            auto digest = hash.GetDigest();
 
-            scan.append(hash.GetDigest(), hash.GetLength());
+            scan.append(digest.data(), digest.size());
             scan << static_cast<uint8>(strings.size());
         }
     },
@@ -773,7 +798,7 @@ void WardenWin::LoadScriptedScans()
         return false;
     },
     // TODO: Replace the magic number below with combined driver string lengths
-    (sizeof(uint8) + sizeof(uint32) + SHA_DIGEST_LENGTH + sizeof(uint8)) * HypervisorCount + 21,
+    (sizeof(uint8) + sizeof(uint32) + Crypto::Hash::SHA1::Digest::size() + sizeof(uint8)) * HypervisorCount + 21,
     sizeof(uint8) * HypervisorCount,
     "Hypervisor check",
     ScanFlags::InitialLogin, 0, UINT16_MAX));
@@ -798,11 +823,11 @@ void WardenWin::LoadScriptedScans()
 
         static_assert(sizeof(pattern) <= 0xFF, "pattern length must fit into 8 bits");
 
-        HMACSHA1 hash(reinterpret_cast<uint8 const*>(&seed), sizeof(seed));
+        Crypto::Hash::HMACSHA1::Generator hash(reinterpret_cast<uint8 const*>(&seed), sizeof(seed));
         hash.UpdateData(&pattern[0], sizeof(pattern));
-        hash.Finalize();
+        auto digest = hash.GetDigest();
 
-        scan.append(hash.GetDigest(), hash.GetLength());
+        scan.append(digest.data(), digest.size());
 
         scan << warden->GetModule()->memoryRead << static_cast<uint8>(sizeof(pattern));
     },
@@ -813,7 +838,7 @@ void WardenWin::LoadScriptedScans()
 
         // if this is not found, it means someone has tampered with the function
         return !found;
-    }, sizeof(uint8) + sizeof(uint32) + SHA_DIGEST_LENGTH + sizeof(uint32) + sizeof(uint8), sizeof(uint8),
+    }, sizeof(uint8) + sizeof(uint32) + Crypto::Hash::SHA1::Digest::size() + sizeof(uint32) + sizeof(uint8), sizeof(uint8),
     "Warden Memory Read check",
     ScanFlags::None, 0, UINT16_MAX));
 
@@ -977,7 +1002,8 @@ void WardenWin::LoadScriptedScans()
     }, sizeof(uint8) + sizeof(uint8) + sizeof(uint32) + sizeof(uint8), sizeof(uint8) + sizeof(uint32),
     "EndScene locate stage 2", ScanFlags::OffsetsInitialized, 0, UINT16_MAX);
 
-    sWardenScanMgr.AddWindowsScan(std::make_shared<WindowsScan>(
+    // Check whenever the user is using OpenGL or Direct3D
+    auto const endSceneLocate15 = std::make_shared<WindowsScan>(
     // builder
     [](Warden const* warden, std::vector<std::string>&, ByteBuffer& scan)
     {
@@ -989,11 +1015,73 @@ void WardenWin::LoadScriptedScans()
 
         scan << static_cast<uint8>(wardenWin->GetModule()->opcodes[READ_MEMORY] ^ wardenWin->GetXor())
              << static_cast<uint8>(0)
-             << offsets->g_theGxDevicePtr
+             << wardenWin->m_endSceneAddress + offsets->g_gxDevicePtr_OfsApiKind
              << static_cast<uint8>(sizeof(uint32));
     },
     // checker
     [endSceneLocate2](Warden const* warden, ByteBuffer& buff)
+    {
+        auto const wardenWin = const_cast<WardenWin*>(reinterpret_cast<WardenWin const*>(warden));
+
+        auto const result = buff.read<uint8>();
+
+        if (!!result)
+        {
+            sLog.OutWarden(wardenWin, LOG_LVL_BASIC, "Failed to read g_theGxDevicePtr->renderingApiKind");
+            return true;
+        }
+
+        uint32 rendering_api_int = buff.read<uint32>();
+        nonstd::optional<ClientRenderingApi> rendering_api {};
+        switch (rendering_api_int) // sanity check user provided value (might be invalid)
+        {
+            case 0:
+                rendering_api = ClientRenderingApi::OpenGL;
+                break;
+            case 1:
+                rendering_api = ClientRenderingApi::Direct3D;
+                break;
+        }
+        if (!rendering_api.has_value())
+        {
+            sLog.OutWarden(wardenWin, LOG_LVL_BASIC, "Failed to determine API rendering type");
+            return true;
+        }
+        wardenWin->m_renderingApi = rendering_api;
+
+        if (wardenWin->m_renderingApi == ClientRenderingApi::Direct3D)
+        {
+            // immediately request second stage
+            wardenWin->EnqueueScans({ endSceneLocate2 });
+        }
+        else
+        {
+            // We are not able to determine the endSceneAddress for OpenGL (because nobody reverse engineered it yet)
+            wardenWin->m_endSceneAddress = 0;
+        }
+
+        return false;
+    }, sizeof(uint8) + sizeof(uint8) + sizeof(uint32) + sizeof(uint8), sizeof(uint8) + sizeof(uint32),
+    "EndScene locate stage 1.5", ScanFlags::OffsetsInitialized | ScanFlags::InitialLogin, 0, UINT16_MAX);
+
+    // stage 1: Resolve g_theGxDevicePtr next stages will dereference a pointer chain to find the endSceneAddress (a common hooking pointer for bots)
+    auto const endSceneLocate1 = std::make_shared<WindowsScan>(
+    // builder
+    [](Warden const* warden, std::vector<std::string>&, ByteBuffer& scan)
+    {
+        auto const wardenWin = reinterpret_cast<WardenWin const*>(warden);
+        auto const offsets = GetClientOffets(wardenWin->m_clientBuild);
+
+        if (!offsets)
+            return;
+
+        scan << static_cast<uint8>(wardenWin->GetModule()->opcodes[READ_MEMORY] ^ wardenWin->GetXor())
+            << static_cast<uint8>(0)
+            << offsets->g_theGxDevicePtr
+            << static_cast<uint8>(sizeof(uint32));
+    },
+    // checker
+    [endSceneLocate15, endSceneLocate2](Warden const* warden, ByteBuffer& buff)
     {
         auto const wardenWin = const_cast<WardenWin*>(reinterpret_cast<WardenWin const*>(warden));
 
@@ -1006,6 +1094,9 @@ void WardenWin::LoadScriptedScans()
             return true;
         }
 
+        // We are executing the chain again. endSceneAddress is not fully resolved at this point.
+        wardenWin->m_endSceneFound = false;
+        wardenWin->m_renderingApi.reset();
         buff.read(reinterpret_cast<uint8*>(&wardenWin->m_endSceneAddress), sizeof(wardenWin->m_endSceneAddress));
 
         // if for some reason we get nullptr, abort
@@ -1015,14 +1106,17 @@ void WardenWin::LoadScriptedScans()
             return true;
         }
 
-        // immediately request second stage
-        wardenWin->EnqueueScans({ endSceneLocate2 });
+        auto const offsets = GetClientOffets(wardenWin->m_clientBuild);
+
+        // immediately request next scan in this chain.
+        wardenWin->EnqueueScans({ endSceneLocate15 });
 
         return false;
-    },
-    sizeof(uint8) + sizeof(uint8) + sizeof(uint32) + sizeof(uint8),
-    sizeof(uint8) + sizeof(uint32),
-    "EndScene locate stage 1", ScanFlags::OffsetsInitialized | ScanFlags::InitialLogin, 0, UINT16_MAX));
+    }, sizeof(uint8) + sizeof(uint8) + sizeof(uint32) + sizeof(uint8), sizeof(uint8) + sizeof(uint32),
+    "EndScene locate stage 1", ScanFlags::OffsetsInitialized | ScanFlags::InitialLogin, 0, UINT16_MAX);
+
+    // Add the first scan of the GX checking-chain
+    sWardenScanMgr.AddWindowsScan(endSceneLocate1);
 
     sWardenScanMgr.AddWindowsScan(std::make_shared<WindowsModuleScan>("prxdrvpe.dll",
     // checker
@@ -1174,6 +1268,25 @@ WardenWin::WardenWin(WorldSession* session, BigNumber const& K) :
     m_proxifierFound(false), m_hypervisors(""), m_endSceneFound(false), m_endSceneAddress(0), m_offsetsInitialized(false)
 {
     memset(&m_sysInfo, 0, sizeof(m_sysInfo));
+}
+
+std::string const& ClientRenderingApiToString(ClientRenderingApi client_rendering_api)
+{
+    switch (client_rendering_api)
+    {
+    case ClientRenderingApi::Direct3D:
+    {
+        static std::string txt = "Direct3D";
+        return txt;
+    }
+    case ClientRenderingApi::OpenGL:
+    {
+        static std::string txt = "OpenGL";
+        return txt;
+    }
+    default:
+        MANGOS_ASSERT(false);
+    }
 }
 
 // read the dx9 EndScene binary code to look for bad stuff
@@ -1364,7 +1477,7 @@ void WardenWin::SetCharEnumPacket(WorldPacket&& packet)
 }
 
 void WardenWin::GetPlayerInfo(std::string& clock, std::string& fingerprint, std::string& hypervisors,
-    std::string& endscene, std::string& proxifier) const
+    std::string& renderer, std::string& proxifier) const
 {
     if (!!m_lastTimeCheckServer)
     {
@@ -1400,13 +1513,28 @@ void WardenWin::GetPlayerInfo(std::string& clock, std::string& fingerprint, std:
     if (m_hypervisors.length() > 0)
         hypervisors = "Hypervisor(s) found: " + m_hypervisors;
 
+    if (m_renderingApi.has_value())
+    {
+        std::stringstream s;
+        s << "Renderer: " << ClientRenderingApiToString(m_renderingApi.value());
+        renderer = s.str();
+    }
+    else
+    {
+        std::stringstream s;
+        s << "Renderer: Unknown";
+        renderer = s.str();
+    }
+
     if (m_endSceneFound)
     {
         std::stringstream s;
-        s << "EndScene: 0x" << std::hex << m_endSceneAddress;
-        endscene = s.str();
+        s << " (EndScene: 0x" << std::hex << m_endSceneAddress << ")";
+        renderer += s.str();
     }
 
     if (m_proxifierFound)
         proxifier = "Proxifier is running";
 }
+
+#endif

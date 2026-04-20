@@ -33,6 +33,7 @@ class Unit;
 class WorldObject;
 class SpellEntry;
 class SpellCaster;
+struct AuraScript;
 
 namespace Spells
 {
@@ -415,6 +416,47 @@ namespace Spells
                 effect == SPELL_EFFECT_APPLY_AREA_AURA_FRIEND ;
     }
 
+    inline uint32 GetAllowedTargetMaskForTargetType(SpellTarget target)
+    {
+        switch (target)
+        {
+            case TARGET_ENUM_UNITS_SCRIPT_AOE_AT_SRC_LOC:
+            case TARGET_PLAYER_NYI:
+            case TARGET_ENUM_UNITS_ENEMY_AOE_AT_SRC_LOC:
+            case TARGET_ENUM_UNITS_FRIEND_AOE_AT_SRC_LOC:
+            case TARGET_ENUM_UNITS_PARTY_AOE_AT_SRC_LOC:
+            case TARGET_ENUM_GAMEOBJECTS_SCRIPT_AOE_AT_SRC_LOC:
+                return TARGET_FLAG_SOURCE_LOCATION;
+            case TARGET_ENUM_UNITS_SCRIPT_AOE_AT_DEST_LOC:
+            case TARGET_ENUM_UNITS_ENEMY_AOE_AT_DEST_LOC:
+            case TARGET_ENUM_UNITS_ENEMY_AOE_AT_DYNOBJ_LOC:
+            case TARGET_ENUM_UNITS_FRIEND_AOE_AT_DYNOBJ_LOC:
+            case TARGET_ENUM_UNITS_FRIEND_AOE_AT_DEST_LOC:
+            case TARGET_ENUM_UNITS_PARTY_AOE_AT_DEST_LOC:
+            case TARGET_ENUM_GAMEOBJECTS_SCRIPT_AOE_AT_DEST_LOC:
+                return TARGET_FLAG_DEST_LOCATION;
+            case TARGET_GAMEOBJECT:
+                return TARGET_FLAG_GAMEOBJECT;
+            case TARGET_LOCKED:
+                return TARGET_FLAG_ITEM | TARGET_FLAG_GAMEOBJECT | TARGET_FLAG_LOCKED;
+            case TARGET_UNIT_ENEMY:
+            case TARGET_LOCATION_CASTER_TARGET_POSITION:
+                return TARGET_FLAG_UNIT | TARGET_FLAG_UNIT_ENEMY;
+            case TARGET_UNIT_FRIEND:
+            case TARGET_UNIT_FRIEND_CHAIN_HEAL:
+                return TARGET_FLAG_UNIT | TARGET_FLAG_UNIT_ALLY;
+            case TARGET_UNIT_PARTY:
+                return TARGET_FLAG_UNIT | TARGET_FLAG_UNIT_PARTY;
+            case TARGET_UNIT_RAID:
+            case TARGET_UNIT_RAID_AND_CLASS:
+                return TARGET_FLAG_UNIT | TARGET_FLAG_UNIT_RAID;
+            case TARGET_UNIT:
+            case TARGET_LOCATION_UNIT_POSITION:
+                return TARGET_FLAG_UNIT;
+        }
+        return 0;
+    }
+
     inline uint32 GetDispellMask(DispelType dispel)
     {
         // If dispell all
@@ -611,7 +653,7 @@ class SpellEntry
         uint32    EffectAmplitude[MAX_EFFECT_INDEX] = {};          // 97-99
         float     EffectMultipleValue[MAX_EFFECT_INDEX] = {};      // 100-102
         uint32    EffectChainTarget[MAX_EFFECT_INDEX] = {};        // 103-105
-        uint32    EffectItemType[MAX_EFFECT_INDEX] = {};           // 106-108
+        uint64    EffectItemType[MAX_EFFECT_INDEX] = {};           // 106-108
         int32     EffectMiscValue[MAX_EFFECT_INDEX] = {};          // 109-111
         uint32    EffectTriggerSpell[MAX_EFFECT_INDEX] = {};       // 112-114
         float     EffectPointsPerComboPoint[MAX_EFFECT_INDEX] = {};// 115-117
@@ -647,6 +689,8 @@ class SpellEntry
         uint32 MinTargetLevel = 0;                                 // 162
         uint32 Custom = 0;                                         // 176
         uint32 Internal = 0;                                       // Assigned by the core.
+        uint32 AllowedTargetMask = 0;                              // Assigned by the core.
+        uint32 ScriptId = 0;
 
         // HELPERS:
         DiminishingGroup GetDiminishingReturnsGroup(bool triggered) const;
@@ -698,6 +742,7 @@ class SpellEntry
         bool HasAttribute(SpellAttributesEx2 attribute) const { return AttributesEx2 & attribute; }
         bool HasAttribute(SpellAttributesEx3 attribute) const { return AttributesEx3 & attribute; }
         bool HasAttribute(SpellAttributesEx4 attribute) const { return AttributesEx4 & attribute; }
+        bool HasAttribute(SpellAttributesCustom attribute) const { return Custom & attribute; }
 
         bool HasSpellInterruptFlag(SpellInterruptFlags flag) const { return InterruptFlags & flag; }
         bool HasAuraInterruptFlag(SpellAuraInterruptFlags flag) const { return AuraInterruptFlags & flag; }
@@ -880,7 +925,7 @@ class SpellEntry
         bool IsDeathOnlySpell() const
         {
             return HasAttribute(SPELL_ATTR_EX3_ONLY_ON_GHOSTS) || 
-                   (Targets & (TARGET_FLAG_PVP_CORPSE | TARGET_FLAG_UNIT_CORPSE | TARGET_FLAG_CORPSE)) ||
+                   (Targets & (TARGET_FLAG_CORPSE_ENEMY | TARGET_FLAG_UNIT_DEAD | TARGET_FLAG_CORPSE_ALLY)) ||
                    (Id == 2584);
         }
 
@@ -1066,6 +1111,8 @@ class SpellEntry
             return false;
         }
 
+        bool CanTriggerWeaponProcs() const;
+
         bool HasDirectThreatIncreaseEffect() const
         {
             for (uint8 i = 0; i < MAX_EFFECT_INDEX; ++i)
@@ -1167,7 +1214,7 @@ class SpellEntry
 
         int32 GetDuration() const;
         int32 GetMaxDuration() const;
-        int32 CalculateDuration(WorldObject const* caster = nullptr) const;
+        int32 CalculateDuration(WorldObject const* caster = nullptr, Unit const* target = nullptr, AuraScript* auraScript = nullptr) const;
         uint32 GetCastTime(SpellCaster const* caster, Spell* spell = nullptr) const;
         uint32 GetCastTimeForBonus(DamageEffectType damagetype) const;
         uint16 GetAuraMaxTicks() const;

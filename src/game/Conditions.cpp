@@ -109,6 +109,7 @@ uint8 const ConditionTargetsInternal[] =
     CONDITION_REQ_TARGET_WORLDOBJECT, //  56
     CONDITION_REQ_SOURCE_CREATURE,    //  57
     CONDITION_REQ_SOURCE_CREATURE,    //  58
+    CONDITION_REQ_TARGET_PLAYER,      //  59
 };
 
 // Starts from 4th element so that -3 will return first element.
@@ -654,6 +655,20 @@ bool inline ConditionEntry::Evaluate(WorldObject const* target, Map const* map, 
 
             return true;
         }
+        case CONDITION_AREA_EXPLORED:
+        {
+            uint16 areaFlag = AreaEntry::GetFlagById(m_value1);
+            if (areaFlag == 0xffff)
+                return false;
+
+            int offset = areaFlag / 32;
+            if (offset >= PLAYER_EXPLORED_ZONES_SIZE)
+                return false;
+
+            uint32 val = (uint32)(1 << (areaFlag % 32));
+            uint32 currFields = target->GetUInt32Value(PLAYER_EXPLORED_ZONES_1 + offset);
+            return (currFields & val) != 0;
+        }
     }
     return false;
 }
@@ -875,6 +890,7 @@ bool ConditionEntry::IsValid()
             break;
         }
         case CONDITION_AREAID:
+        case CONDITION_AREA_EXPLORED:
         {
             const auto *areaEntry = AreaEntry::GetById(m_value1);
             if (!areaEntry)
@@ -1050,7 +1066,7 @@ bool ConditionEntry::IsValid()
         }
         case CONDITION_NEARBY_GAMEOBJECT:
         {
-            if (!sObjectMgr.GetGameObjectInfo(m_value1))
+            if (!sObjectMgr.GetGameObjectTemplate(m_value1))
             {
                 if (!sObjectMgr.IsExistingGameObjectId(m_value1))
                 {
@@ -1094,7 +1110,7 @@ bool ConditionEntry::IsValid()
         {
             if (m_value1 > 10)
             {
-                sLog.Out(LOG_DBERROR, LOG_LVL_MINIMAL, "Patch condition (entry %u, type %u) has an invalid value in value1 (must be 0..10), skipping.", m_entry, m_condition, m_value1);
+                sLog.Out(LOG_DBERROR, LOG_LVL_MINIMAL, "Patch condition (entry %u, type %u, value1 %u) has an invalid value in value1 (must be 0..10), skipping.", m_entry, m_condition, m_value1);
                 return false;
             }
             if (m_value2 > 2)
@@ -1106,7 +1122,7 @@ bool ConditionEntry::IsValid()
         }
         case CONDITION_SOURCE_ENTRY:
         {
-            if (!sObjectMgr.GetCreatureTemplate(m_value1) && !sObjectMgr.GetGameObjectInfo(m_value1))
+            if (!sObjectMgr.GetCreatureTemplate(m_value1) && !sObjectMgr.GetGameObjectTemplate(m_value1))
             {
                 if (!sObjectMgr.IsExistingCreatureId(m_value1) && !sObjectMgr.IsExistingGameObjectId(m_value1))
                 {

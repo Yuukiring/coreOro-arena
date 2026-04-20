@@ -4,10 +4,6 @@
 
 #include "scriptPCH.h"
 
-// AI system
-void AddSC_generic_spell_ai();
-void AddSC_npc_escort();
-
 //battlegrounds
 void AddSC_battleground();
 void AddSC_bg_alterac();
@@ -79,7 +75,6 @@ void AddSC_boss_thermaplugg();
 void AddSC_instance_gnomeregan();
 
 void AddSC_boss_lucifron();                          //molten_core
-void AddSC_boss_magmadar();
 void AddSC_boss_gehennas();
 void AddSC_boss_garr();
 void AddSC_boss_baron_geddon();
@@ -239,12 +234,21 @@ void AddSC_war_effort();
 
 void AddSC_npc_j_eevee();                            // J'Eevee, the Imp in a Jar
 
+// Spells
+void AddSC_druid_spell_scripts();
+void AddSC_hunter_spell_scripts();
+void AddSC_item_spell_scripts();
+void AddSC_mage_spell_scripts();
+void AddSC_paladin_spell_scripts();
+void AddSC_priest_spell_scripts();
+void AddSC_rogue_spell_scripts();
+void AddSC_shaman_spell_scripts();
+void AddSC_special_spell_scripts();
+void AddSC_warlock_spell_scripts();
+void AddSC_warrior_spell_scripts();
+
 void AddScripts()
 {
-    //Nostalrius
-    AddSC_generic_spell_ai();
-    AddSC_npc_escort();
-
     //battlegrounds
     AddSC_battleground();
     AddSC_bg_alterac();
@@ -315,7 +319,6 @@ void AddScripts()
     AddSC_boss_thermaplugg();
     AddSC_instance_gnomeregan();
     AddSC_boss_lucifron();                                  //molten_core
-    AddSC_boss_magmadar();
     AddSC_boss_gehennas();
     AddSC_boss_garr();
     AddSC_boss_baron_geddon();
@@ -473,4 +476,16 @@ void AddScripts()
     AddSC_winterspring();
 
     AddSC_npc_j_eevee();
+
+    AddSC_druid_spell_scripts();
+    AddSC_hunter_spell_scripts();
+    AddSC_item_spell_scripts();
+    AddSC_mage_spell_scripts();
+    AddSC_paladin_spell_scripts();
+    AddSC_priest_spell_scripts();
+    AddSC_rogue_spell_scripts();
+    AddSC_shaman_spell_scripts();
+    AddSC_special_spell_scripts();
+    AddSC_warlock_spell_scripts();
+    AddSC_warrior_spell_scripts();
 }

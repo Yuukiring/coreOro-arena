@@ -24,13 +24,15 @@
 #include "Policies/SingletonImp.h"
 #include "Config/Config.h"
 #include "Util.h"
-#include "ByteBuffer.h"
 #include "ProgressBar.h"
 
-#include <stdarg.h>
+#include <cstdarg>
 #include <iostream>
+#include <thread>
 
-#include "ace/OS_NS_unistd.h"
+#if PLATFORM == PLATFORM_WINDOWS
+#include <Windows.h>
+#endif
 
 INSTANTIATE_SINGLETON_1(Log);
 
@@ -105,15 +107,17 @@ void Log::OpenWorldLogFiles()
     logFiles[LOG_RA] = OpenLogFile("LogFile.Ra", "Ra.log", log_file_timestamp, false);
     logFiles[LOG_DBERROR] = OpenLogFile("LogFile.DBError", "DBErrors.log", log_file_timestamp, true);
     logFiles[LOG_DBERRFIX] = OpenLogFile("LogFile.DBErrorFix", "DBErrorFixes.sql", log_file_timestamp, true);
-    logFiles[LOG_LOOTS] = OpenLogFile("LootsLogFile", "Loot.log", log_file_timestamp, false);
-    logFiles[LOG_LEVELUP] = OpenLogFile("LevelupLogFile", "LevelUp.log", log_file_timestamp, false);
+    logFiles[LOG_LOOTS] = OpenLogFile("LogFile.Loot", "Loot.log", log_file_timestamp, false);
+    logFiles[LOG_LEVELUP] = OpenLogFile("LogFile.LevelUp", "LevelUp.log", log_file_timestamp, false);
     logFiles[LOG_PERFORMANCE] = OpenLogFile("LogFile.Performance", "Perf.log", log_file_timestamp, false);
     logFiles[LOG_MONEY_TRADES] = OpenLogFile("LogFile.Trades", "", log_file_timestamp, false);
     logFiles[LOG_GM] = sConfig.GetBoolDefault("GmLogPerAccount", false) ?
         OpenLogFile("LogFile.Gm", "", log_file_timestamp, false) : nullptr;
-    logFiles[LOG_GM_CRITICAL] = OpenLogFile("LogFile.CriticalCommands", "gm_critical.log", log_file_timestamp, false);
+    logFiles[LOG_GM_CRITICAL] = OpenLogFile("LogFile.GmCriticalCommands", "gm_critical.log", log_file_timestamp, false);
     logFiles[LOG_ANTICHEAT] = OpenLogFile("LogFile.Anticheat", "Anticheat.log", log_file_timestamp, false);
     logFiles[LOG_SCRIPTS] = OpenLogFile("LogFile.Scripts", "Scripts.log", log_file_timestamp, false);
+    logFiles[LOG_MOVEMENT] = OpenLogFile("LogFile.Movement", "Movement.log", log_file_timestamp, false);
+    logFiles[LOG_NETWORK] = OpenLogFile("LogFile.Network", "Network.log", log_file_timestamp, false);
 }
 
 void Log::InitSmartlogEntries(std::string const& str)
@@ -126,9 +130,8 @@ void Log::InitSmartlogEntries(std::string const& str)
     uint32 entry;
     std::istringstream ss(str);
 
-    while (ss)
+    while (ss >> entry)
     {
-        ss >> entry;
         m_smartlogExtraEntries.insert(entry);
     }
 }
@@ -143,9 +146,8 @@ void Log::InitSmartlogGuids(std::string const& str)
     uint32 entry;
     std::istringstream ss(str);
 
-    while (ss)
+    while (ss >> entry)
     {
-        ss >> entry;
         m_smartlogExtraGuids.insert(entry);
     }
 }
@@ -377,7 +379,8 @@ if (logType != LOG_PERFORMANCE && logType != LOG_DBERRFIX && m_consoleLevel >= l
 
 void Log::Out(LogType logType, LogLevel logLevel, char const* format, ...)
 {
-    ASSERT(logType >= 0 && logType < LOG_TYPE_MAX&& logLevel >= 0 && logLevel <= LOG_LVL_DEBUG);
+    if (!(logType >= 0 && logType < LOG_TYPE_MAX&& logLevel >= 0 && logLevel <= LOG_LVL_DEBUG))
+        return;
 
     if (!format)
         return;
@@ -444,14 +447,6 @@ void Log::OutFile(LogType logType, LogLevel logLevel, std::string const& str) co
     fflush(logFiles[logType]);
 }
 
-#ifndef USE_ANTICHEAT
-
-void Log::OutWarden(Warden const* /*warden*/, LogLevel /*logLevel*/, char const* /*format*/, ...)
-{
-}
-
-#endif
-
 bool Log::IsSmartLog(uint32 entry, uint32 guid) const
 {
     return m_smartlogExtraEntries.find(entry) != m_smartlogExtraEntries.end() ||
@@ -460,7 +455,7 @@ bool Log::IsSmartLog(uint32 entry, uint32 guid) const
 
 void Log::WaitBeforeContinueIfNeed()
 {
-    int mode = sConfig.GetIntDefault("WaitAtStartupError", 0);
+    int mode = sConfig.GetIntDefault("WaitAtStartupError", 5);
 
     if (mode < 0)
     {
@@ -476,7 +471,7 @@ void Log::WaitBeforeContinueIfNeed()
         for (int i = 0; i < mode; ++i)
         {
             bar.step();
-            ACE_OS::sleep(1);
+            std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }
 }

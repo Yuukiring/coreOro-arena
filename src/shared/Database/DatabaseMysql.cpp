@@ -24,6 +24,7 @@
 #include <errmsg.h>
 #include <mysqld_error.h>
 #include "Log.h"
+#include "Errors.h"
 #include "Util.h"
 #include "Policies/SingletonImp.h"
 #include "Platform/Define.h"
@@ -189,6 +190,7 @@ bool MySQLConnection::HandleMySQLError(uint32 errNo)
             return false;
         default:
             sLog.Out(LOG_DBERROR, LOG_LVL_MINIMAL, "Unhandled MySQL errno %u. Unexpected behaviour possible.", errNo);
+            ASSERT(false);
             return false;
     }
 }

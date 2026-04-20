@@ -31,6 +31,7 @@
 #include "DBCStores.h"
 #include "SQLStorages.h"
 #include "SpellEntry.h"
+#include "Errors.h"
 
 #include <map>
 #include <memory>
@@ -38,9 +39,6 @@
 class Player;
 class Spell;
 class Unit;
-
-// Spell affects related declarations (accessed using SpellMgr functions)
-typedef std::map<uint32, uint64> SpellAffectMap;
 
 struct SpellProcEventEntry
 {
@@ -102,6 +100,7 @@ struct SpellThreatEntry
 
 typedef std::map<uint32, uint8> SpellElixirMap;
 typedef std::map<uint32, uint32> SpellEnchantChargesMap;
+typedef std::map<uint32, float> SpellConeMap;
 typedef std::map<uint32, float> SpellProcItemEnchantMap;
 typedef std::map<uint32, SpellThreatEntry> SpellThreatMap;
 
@@ -110,10 +109,11 @@ enum SpellTargetType
 {
     SPELL_TARGET_TYPE_GAMEOBJECT = 0,
     SPELL_TARGET_TYPE_CREATURE   = 1,
-    SPELL_TARGET_TYPE_DEAD       = 2
+    SPELL_TARGET_TYPE_DEAD       = 2,
+    SPELL_TARGET_TYPE_PLAYER     = 3
 };
 
-#define MAX_SPELL_TARGET_TYPE 3
+#define MAX_SPELL_TARGET_TYPE 4
 
 struct SpellTargetEntry
 {
@@ -391,9 +391,6 @@ class SpellMgr
         // Spell affects
         uint64 GetSpellAffectMask(uint32 spellId, SpellEffectIndex effectId) const
         {
-            SpellAffectMap::const_iterator itr = mSpellAffectMap.find((spellId<<8) + effectId);
-            if (itr != mSpellAffectMap.end())
-                return itr->second;
             if (SpellEntry const* spellEntry = GetSpellEntry(spellId))
                 return spellEntry->EffectItemType[effectId];
             return 0;
@@ -421,6 +418,15 @@ class SpellMgr
                 return SPELL_WELL_FED;
             else
                 return SPELL_NORMAL;
+        }
+
+        float GetSpellCone(uint32 spellid) const
+        {
+            auto itr = mSpellCones.find(spellid);
+            if (itr == mSpellCones.end())
+                return (60.0f * M_PI_F / 180.0f);
+
+            return itr->second;
         }
 
         uint32 GetSpellEnchantCharges(uint32 spellid) const
@@ -677,12 +683,12 @@ class SpellMgr
         void CheckUsedSpells(char const* table);
 
         // Loading data at server startup
+        void LoadSpellCones();
         void LoadSpellChains();
         void LoadSpellEnchantCharges();
         void LoadSpellLearnSkills();
         void LoadSpellLearnSpells();
         void LoadSpellScriptTarget();
-        void LoadSpellAffects();
         void LoadSpellElixirs();
         void LoadSpellProcEvents();
         void LoadSpellProcItemEnchant();
@@ -700,6 +706,7 @@ class SpellMgr
 
         // SpellEntry
         void LoadSpells();
+        void LoadSpell(Field* fields);
         void AssignInternalSpellFlags();
         SpellEntry const* GetSpellEntry(uint32 spellId) const { return spellId < GetMaxSpellId() ? mSpellEntryMap[spellId].get() : nullptr; }
         uint32 GetMaxSpellId() const { return mSpellEntryMap.size(); }
@@ -724,12 +731,12 @@ class SpellMgr
 
     private:
         SpellScriptTarget  mSpellScriptTarget;
+        SpellConeMap       mSpellCones;
         SpellChainMap      mSpellChains;
         SpellChainMapNext  mSpellChainsNext;
         SpellLearnSkillMap mSpellLearnSkills;
         SpellLearnSpellMap mSpellLearnSpells;
         SpellTargetPositionMap mSpellTargetPositions;
-        SpellAffectMap     mSpellAffectMap;
         SpellElixirMap     mSpellElixirs;
         SpellThreatMap     mSpellThreatMap;
         SpellProcEventMap  mSpellProcEventMap;

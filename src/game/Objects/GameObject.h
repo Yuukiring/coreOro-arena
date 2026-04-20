@@ -33,7 +33,7 @@
 class Unit;
 class GameObjectAI;
 class GameObjectModel;
-class Transport;
+class ShipTransport;
 struct TransportAnimation;
 
 struct GameObjectDisplayInfoEntry;
@@ -59,7 +59,7 @@ class GameObject : public SpellCaster
         void UpdateRotationFields(float rotation2 = 0.0f, float rotation3 = 0.0f);
         QuaternionData const GetLocalRotation() const;
 
-        char const* GetName() const final { return GetGOInfo()->name; }
+        char const* GetName() const final { return GetGOInfo()->name.c_str(); }
         // overwrite WorldObject function for proper name localization
         char const* GetNameForLocaleIdx(int32 locale_idx) const final;
 
@@ -191,6 +191,8 @@ class GameObject : public SpellCaster
         void AddUse() { ++m_useTimes; }
         uint32 GetUseCount() const { return m_useTimes; }
 
+        void SetCooldownTime(time_t cooldown) { m_cooldownTime = cooldown; }
+
         void SaveRespawnTime() override;
 
         Loot        loot;
@@ -221,7 +223,7 @@ class GameObject : public SpellCaster
 
         // Gestion des GameObjectAI
         void AIM_Initialize();
-        GameObjectAI* AI() { return i_AI; }
+        GameObjectAI* AI() { return m_AI; }
 
         void UpdateCollisionState();
         void UpdateModel();                                 // updates model in case displayId were changed
@@ -249,7 +251,9 @@ class GameObject : public SpellCaster
         bool IsVisibleForInState(WorldObject const* pDetector, WorldObject const* viewPoint, bool inVisibleList) const override;
 
         uint32 GetFactionTemplateId() const final { return GetGOInfo()->faction; }
-        uint32 GetLevel() const final ;
+        uint32 GetLevel() const final;
+        bool CanAggroWhenOpening() const;
+        void DoAggroWhenOpening(Unit* pUser) const;
 
         bool IsAtInteractDistance(Position const& pos, float radius) const;
         bool IsAtInteractDistance(Player const* player, uint32 maxRange = 0) const;
@@ -282,7 +286,7 @@ class GameObject : public SpellCaster
 
         Position m_stationaryPosition;
 
-        GameObjectAI* i_AI;
+        GameObjectAI* m_AI;
 
         uint32 m_playerGroupId;
     private:

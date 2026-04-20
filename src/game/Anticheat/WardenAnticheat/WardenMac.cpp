@@ -25,17 +25,14 @@
 #include "WardenModuleMgr.hpp"
 #include "WardenScanMgr.hpp"
 #include "WorldSession.h"
-#include "Auth/BigNumber.h"
-#include "Auth/Sha1.h"
 #include "World.h"
 #include "Database/DatabaseEnv.h"
-
-#include <openssl/md5.h>
 
 #include <memory>
 #include <vector>
 #include <string>
-#include <sstream>
+
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_5_1
 
 void WardenMac::LoadScriptedScans()
 {
@@ -132,3 +129,5 @@ void WardenMac::InitializeClient()
 {
     m_initialized = true;
 }
+
+#endif

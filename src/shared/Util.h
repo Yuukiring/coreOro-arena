@@ -25,8 +25,11 @@
 #include "Common.h"
 #include "Duration.h"
 
+#include <cctype>
 #include <string>
 #include <vector>
+
+#include "nonstd/optional.hpp"
 
 class Tokenizer
 {
@@ -62,7 +65,7 @@ Tokens StrSplit(std::string const& src, std::string const& sep);
 uint32 GetUInt32ValueFromArray(Tokens const& data, uint16 index);
 float GetFloatValueFromArray(Tokens const& data, uint16 index);
 
-void stripLineInvisibleChars(std::string &src);
+void stripLineInvisibleChars(std::string& src);
 void stripLineInvisibleChars(char* str);
 
 std::string secsToTimeString(time_t timeInSecs, bool shortText = false, bool hoursOnly = false);
@@ -184,8 +187,8 @@ bool Utf8toWStr(std::string const& utf8str, std::wstring& wstr, size_t max_len =
 
 bool WStrToUtf8(std::wstring& wstr, std::string& utf8str);
 
-size_t utf8length(std::string& utf8str);                    // set string to "" if invalid utf8 sequence
-void utf8truncate(std::string& utf8str,size_t len);
+// returns nullopt if invalid utf8
+nonstd::optional<size_t> utf8length(std::string const& utf8str);
 
 inline bool isBasicLatinCharacter(wchar_t wchar)
 {
@@ -335,12 +338,18 @@ inline bool isLeapYear(int year)
 
 inline void strToUpper(std::string& str)
 {
-    std::transform(str.begin(), str.end(), str.begin(), toupper);
+    std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c)
+    {
+        return std::toupper(c);
+    });
 }
 
 inline void strToLower(std::string& str)
 {
-    std::transform(str.begin(), str.end(), str.begin(), tolower);
+    std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c)
+    {
+        return std::tolower(c);
+    });
 }
 
 inline wchar_t wcharToUpper(wchar_t wchar)
@@ -410,7 +419,7 @@ bool Utf8FitTo(std::string const& str, std::wstring search);
 void utf8printf(FILE* out, char const* str, ...);
 void vutf8printf(FILE* out, char const* str, va_list* ap);
 
-bool IsIPAddress(char const* ipaddress);
+bool IsIPAddress(char const* ipAddressString);
 uint32 CreatePIDFile(std::string const& filename);
 
 void hexEncodeByteArray(uint8* bytes, uint32 arrayLen, std::string& result);
@@ -434,5 +443,17 @@ inline uint32 BatchifyTimer(uint32 timer, uint32 interval)
 typedef char const*(*ValueToStringFunc) (uint32 value);
 
 std::string FlagsToString(uint32 flags, ValueToStringFunc getNameFunc);
+
+inline float GetLambda(float startIndex, float endIndex, float currentIndex)
+{
+    return (currentIndex - startIndex) / (endIndex - startIndex);
+}
+
+inline float InterpolateValueAtIndex(float startIndex, float startValue, float endIndex, float endValue, float currentIndex)
+{
+    return startValue + GetLambda(startIndex, endIndex, currentIndex) * (endValue - startValue);
+}
+
+std::vector<std::string> SplitStringByDelimiter(std::string const& str, char delimiter);
 
 #endif

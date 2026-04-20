@@ -86,7 +86,7 @@ bool ChatHandler::HandleNpcSpawnInfoCommand(char* /*args*/)
     }
     PSendSysMessage("Movement Type: %s", movementType.c_str());
     PSendSysMessage("Wander Distance: %g", pData->wander_distance);
-    PSendSysMessage(LANG_NPCINFO_ACTIVE_VISIBILITY, target->isActiveObject(), target->GetVisibilityModifier());
+    PSendSysMessage(LANG_NPCINFO_ACTIVE_VISIBILITY, target->IsActiveObject(), target->GetVisibilityModifier());
     ShowNpcOrGoSpawnInformation<Creature>(target->GetGUIDLow());
 
     return true;
@@ -130,7 +130,7 @@ bool ChatHandler::HandleNpcInfoCommand(char* /*args*/)
     PSendSysMessage(LANG_NPCINFO_DUNGEON_ID, target->GetInstanceId());
     PSendSysMessage(LANG_NPCINFO_POSITION, float(target->GetPositionX()), float(target->GetPositionY()), float(target->GetPositionZ()));
     PSendSysMessage(LANG_NPCINFO_AIINFO, target->GetAIName().c_str(), target->GetScriptName().c_str());
-    PSendSysMessage(LANG_NPCINFO_ACTIVE_VISIBILITY, target->isActiveObject(), target->GetVisibilityModifier());
+    PSendSysMessage(LANG_NPCINFO_ACTIVE_VISIBILITY, target->IsActiveObject(), target->GetVisibilityModifier());
 
     if ((npcflags & UNIT_NPC_FLAG_VENDOR))
         SendSysMessage(LANG_NPCINFO_VENDOR);
@@ -507,7 +507,7 @@ bool ChatHandler::HandleNpcSpawnSetAurasCommand(char* args)
     {
         delete const_cast<CreatureDataAddon*>(pAddonEntry)->auras;
         const_cast<CreatureDataAddon*>(pAddonEntry)->auras = new uint32[auras.size()+1];
-        for (int i = 0; i < auras.size(); i++)
+        for (size_t i = 0; i < auras.size(); i++)
             const_cast<uint32*>(const_cast<CreatureDataAddon*>(pAddonEntry)->auras)[i] = atoi(auras[i].c_str());
         const_cast<uint32*>(const_cast<CreatureDataAddon*>(pAddonEntry)->auras)[auras.size()] = 0;
         WorldDatabase.PExecuteLog("UPDATE `creature_addon` SET `auras`='%s' WHERE `guid`=%u", args, pCreature->GetDBTableGUIDLow());
@@ -1800,7 +1800,7 @@ bool ChatHandler::HandleWpAddCommand(char* args)
             }
             wpDestination = (WaypointPathOrigin)wpTarget->GetPathOrigin();
             wpPathId = wpTarget->GetPathId();
-            wpPointId = wpTarget->GetWaypointId() + 1;      // Insert as next waypoint
+            wpPointId = wpTarget->GetWaypointId();      // Insert as next waypoint
         }
         else // normal creature selected
             wpOwner = targetCreature;
@@ -1880,7 +1880,7 @@ bool ChatHandler::HandleWpAddCommand(char* args)
     m_session->GetPlayer()->GetPosition(x, y, z);
     if (!sWaypointMgr.AddNode(wpOwner->GetEntry(), wpOwner->GetGUIDLow(), wpPointId, wpDestination, x, y, z))
     {
-        PSendSysMessage(LANG_WAYPOINT_NOTCREATED, wpPointId, wpOwner->GetGuidStr().c_str(), wpPathId, WaypointManager::GetOriginString(wpDestination).c_str());
+        PSendSysMessage(LANG_WAYPOINT_NOTCREATED, wpPointId + 1, wpOwner->GetGuidStr().c_str(), wpPathId, WaypointManager::GetOriginString(wpDestination).c_str());
         SetSentErrorMessage(true);
         return false;
     }
@@ -1898,7 +1898,7 @@ bool ChatHandler::HandleWpAddCommand(char* args)
         }
     }
 
-    PSendSysMessage(LANG_WAYPOINT_ADDED, wpPointId, wpOwner->GetGuidStr().c_str(), wpPathId, WaypointManager::GetOriginString(wpDestination).c_str());
+    PSendSysMessage(LANG_WAYPOINT_ADDED, wpPointId + 1, wpOwner->GetGuidStr().c_str(), wpPathId, WaypointManager::GetOriginString(wpDestination).c_str());
 
     return true;
 }                                                           // HandleWpAddCommand
@@ -2081,9 +2081,18 @@ bool ChatHandler::HandleWpModifyCommand(char* args)
     if (subCmd == "del")                                    // Remove WP, no additional command required
     {
         sWaypointMgr.DeleteNode(wpOwner->GetEntry(), wpOwner->GetGUIDLow(), wpId, wpPathId, wpSource);
-
-        if (TemporarySummonWaypoint* wpCreature = dynamic_cast<TemporarySummonWaypoint*>(targetCreature))
-            wpCreature->UnSummon();
+        // Unsummon old visuals, summon new ones
+        UnsummonVisualWaypoints(m_session->GetPlayer(), wpOwner->GetObjectGuid());
+        WaypointPath const* wpPath = sWaypointMgr.GetPathFromOrigin(wpOwner->GetEntry(), wpOwner->GetGUIDLow(), wpPathId, wpSource);
+        for (const auto& itr : *wpPath)
+        {
+            if (!Helper_CreateWaypointFor(wpOwner, wpSource, wpPathId, itr.first, &itr.second, waypointInfo))
+            {
+                PSendSysMessage(LANG_WAYPOINT_VP_NOTCREATED, VISUAL_WAYPOINT);
+                SetSentErrorMessage(true);
+                return false;
+            }
+        }
 
         if (wpPath->empty())
         {
@@ -2096,6 +2105,10 @@ bool ChatHandler::HandleWpModifyCommand(char* args)
             }
             wpOwner->SaveToDB();
         }
+        else if (wpOwner->GetMotionMaster()->GetCurrentMovementGeneratorType() == WAYPOINT_MOTION_TYPE)
+            if (WaypointMovementGenerator<Creature> const* wpMMGen = dynamic_cast<WaypointMovementGenerator<Creature> const*>(wpOwner->GetMotionMaster()->GetCurrent()))
+                if (wpPath->size() == wpMMGen->GetCurrentNode())
+                    wpOwner->GetMotionMaster()->Initialize();
 
         PSendSysMessage(LANG_WAYPOINT_REMOVED);
         return true;

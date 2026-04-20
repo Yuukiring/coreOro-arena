@@ -22,35 +22,32 @@
  */
 
 #include "WardenModule.hpp"
-#include "WardenKeyGeneration.h"
+#include "WardenKeyGenerator.h"
 
 #include "Common.h"
 #include "Language.h"
-#include "Player.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "World.h"
 #include "Log.h"
+#include "Errors.h"
 #include "Opcodes.h"
 #include "ByteBuffer.h"
 #include "Database/DatabaseEnv.h"
 #include "Policies/SingletonImp.h"
-#include "Auth/BigNumber.h"
+#include "Crypto/BigNumber.h"
 #include "Warden.hpp"
 #include "WardenModuleMgr.hpp"
 #include "Util.h"
 #include "WardenWin.hpp"
 #include "WardenMac.hpp"
 #include "WardenScanMgr.hpp"
-#include "AccountMgr.h"
-
-#include <openssl/md5.h>
-#include <openssl/sha.h>
 
 #include <zlib.h>
-
 #include <algorithm>
 #include <memory>
+
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_5_1
 
 void Log::OutWarden(Warden const* warden, LogLevel logLevel, char const* format, ...)
 {
@@ -111,7 +108,7 @@ Warden::Warden(WorldSession* session, WardenModule const* module, BigNumber cons
 {
     auto const kBytes = K.AsByteArray();
 
-    SHA1Randx WK(kBytes.data(), kBytes.size());
+    WardenKeyGenerator WK(kBytes.data(), kBytes.size());
 
     uint8 inputKey[KeyLength];
     WK.Generate(inputKey, sizeof(inputKey));
@@ -440,13 +437,14 @@ void Warden::StopScanClock()
 
 uint32 Warden::BuildChecksum(uint8 const* data, size_t size)
 {
-    uint8 hash[SHA_DIGEST_LENGTH];
-    SHA1(data, size, hash);
+    auto hash = Crypto::Hash::SHA1::ComputeFrom(data, size);
 
     uint32 checkSum = 0;
-
-    for (auto i = 0u; i < sizeof(hash) / sizeof(uint32); ++i)
-        checkSum ^= *reinterpret_cast<uint32*>(&hash[i * 4]);
+    checkSum ^= *reinterpret_cast<uint32*>(&hash[sizeof(uint32) * 0]);
+    checkSum ^= *reinterpret_cast<uint32*>(&hash[sizeof(uint32) * 1]);
+    checkSum ^= *reinterpret_cast<uint32*>(&hash[sizeof(uint32) * 2]);
+    checkSum ^= *reinterpret_cast<uint32*>(&hash[sizeof(uint32) * 3]);
+    checkSum ^= *reinterpret_cast<uint32*>(&hash[sizeof(uint32) * 4]);
 
     return checkSum;
 }
@@ -504,7 +502,7 @@ void Warden::ApplyPenalty(std::string message, WardenActions penalty, std::share
     });
 }
 
-void Warden::HandlePacket(WorldPacket& recvData)
+void Warden::HandlePacket(ByteBuffer recvData)
 {
     // initialize decrypt packet
     DecryptData(const_cast<uint8*>(recvData.contents()), recvData.size());
@@ -621,15 +619,22 @@ void Warden::HandlePacket(WorldPacket& recvData)
             if (!!m_crk)
                 return;
 
-            // at this point the client has our module loaded.  send whatever packets are necessary to initialize Warden
-            InitializeClient();
+            // in versions before 1.8, the client does not call the module's tick function
+            // this means the client can never respond to any scans, and will time out
+            // it's unlcear if they used different modules that don't require a tick
+            // or if warden was just unfinished and not actually used before 1.8
+            if (m_clientBuild > CLIENT_BUILD_1_7_1)
+            {
+                // at this point the client has our module loaded.  send whatever packets are necessary to initialize Warden
+                InitializeClient();
 
-            // send any initial hack scans that the scan manager may have for us
-            RequestScans(SelectScans(ScanFlags::InitialLogin));
+                // send any initial hack scans that the scan manager may have for us
+                RequestScans(SelectScans(ScanFlags::InitialLogin));
 
-            // begin the scan clock (note that even if the clock expires before any initial scans are answered, no new
-            // checks will be requested until the reply is received).
-            BeginScanClock();
+                // begin the scan clock (note that even if the clock expires before any initial scans are answered, no new
+                // checks will be requested until the reply is received).
+                BeginScanClock();
+            }
 
             break;
         }
@@ -653,18 +658,20 @@ void Warden::HandlePacket(WorldPacket& recvData)
 void Warden::Update()
 {
     {
-        std::vector<WorldPacket> packetQueue;
+        std::queue<std::vector<uint8>> packetQueue;
 
         {
-            std::lock_guard<std::mutex> lock(m_packetQueueMutex);
-            std::swap(packetQueue, m_packetQueue);
+            std::lock_guard<std::mutex> lock(m_packetDataQueueMutex);
+            std::swap(packetQueue, m_packetDataQueue);
         }
 
-        for (auto& packet : packetQueue)
+        while (packetQueue.size())
         {
+            std::vector<uint8> packetData = std::move(packetQueue.front());
+            packetQueue.pop();
             try
             {
-                HandlePacket(packet);
+                HandlePacket(ByteBuffer::from(std::move(packetData)));
             }
             catch (ByteBufferException &)
             {
@@ -716,3 +723,5 @@ void Warden::LogPositiveToDB(std::shared_ptr<Scan const> scan)
 
     sLog.OutWarden(this, LOG_LVL_MINIMAL, "Check %u penalty %u", scan->checkId, scan->penalty);
 }
+
+#endif

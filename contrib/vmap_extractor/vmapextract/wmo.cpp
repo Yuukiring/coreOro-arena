@@ -91,10 +91,6 @@ bool WMORoot::open()
             {
                 std::string path = ptr;
 
-                char* s = GetPlainName(ptr);
-                fixnamen(s, strlen(s));
-                fixname2(s, strlen(s));
-
                 uint32 doodadNameIndex = ptr - f.getPointer();
                 ptr += path.length() + 1;
 
@@ -249,7 +245,7 @@ bool WMOGroup::open()
         {
             liquflags |= 1;
             hlq = new WMOLiquidHeader;
-            f.read(hlq, 0x1E);
+            f.read(hlq, WMOLiquidHeaderSize);
             LiquEx_size = sizeof(WMOLiquidVert) * hlq->xverts * hlq->yverts;
             LiquEx = new WMOLiquidVert[hlq->xverts * hlq->yverts];
             f.read(LiquEx, LiquEx_size);
@@ -478,7 +474,7 @@ int WMOGroup::ConvertToVMAPGroupWmo(FILE* output, WMORoot* rootWMO, bool pPrecis
                     liquidEntry = 3;        // magma
                     break;
                 case 3:
-                    if (filename.find("Stratholme_raid") != string::npos)
+                    if (rootWMO->RootWMOID == 4489) // Stratholme_raid.wmo WMOID == 4489
                     {
                         liquidEntry = 21;   // Naxxramas slime
                     }
@@ -497,7 +493,7 @@ int WMOGroup::ConvertToVMAPGroupWmo(FILE* output, WMORoot* rootWMO, bool pPrecis
         llog << ":\ntype: " << hlq->type << " (root:" << rootWMO->flags << " group:" << flags << ")\n";
         llog.close(); */
 
-        fwrite(hlq, sizeof(WMOLiquidHeader), 1, output);
+        fwrite(hlq, WMOLiquidHeaderSize, 1, output);
         // only need height values, the other values are unknown anyway
         for (uint32 i = 0; i < LiquEx_size / sizeof(WMOLiquidVert); ++i)
             fwrite(&LiquEx[i].height, sizeof(float), 1, output);

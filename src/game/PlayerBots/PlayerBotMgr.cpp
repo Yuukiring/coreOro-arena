@@ -14,6 +14,7 @@
 #include "BattleBotAI.h"
 #include "BattleBotWaypoints.h"
 #include "BattleGroundMgr.h"
+#include "MapManager.h"
 #include "Language.h"
 #include "Spell.h"
 
@@ -234,7 +235,15 @@ void PlayerBotMgr::Update(uint32 diff)
             if (iter->second->requestRemoval)
             {
                 if (iter->second->ai && iter->second->ai->me)
+                {
+                    if (!iter->second->ai->me->IsAlive())
+                    {
+                        // don't leave permanent corpse
+                        iter->second->ai->me->ResurrectPlayer(1.0f);
+                        iter->second->ai->me->SpawnCorpseBones();
+                    }
                     iter->second->ai->me->RemoveFromGroup();
+                }
 
                 DeleteBot(iter);
 
@@ -507,7 +516,7 @@ bool PlayerBotMgr::DeleteBot(uint32 playerGUID)
     return DeleteBot(iter);
 }
 
-bool PlayerBotMgr::DeleteBot(std::map<uint32, std::shared_ptr<PlayerBotEntry>>::iterator iter)
+bool PlayerBotMgr::DeleteBot(std::map<uint64, std::shared_ptr<PlayerBotEntry>>::iterator iter)
 {
     if (iter->second->state == PB_STATE_LOADING)
         m_stats.loadingCount--;
@@ -587,13 +596,29 @@ void PlayerBotMgr::AddBattleBot(BattleGroundQueueTypeId queueType, Team botTeam,
 
     if (botTeam == ALLIANCE)
     {
-        sWorld.SendWorldTextToBGAndQueue(LANG_ALLIANCE_BATTLEBOT_ADDED, botLevel, queueType, botLevel, queueType);
-        sLog.Out(LOG_BG, LOG_LVL_BASIC, "[PlayerBotMgr] Adding level %u alliance battlebot to bg queue %u.", botLevel, queueType);
+        if (temporary)
+        {
+            sWorld.SendWorldTextToBGAndQueue(LANG_ALLIANCE_BATTLEBOT_TEMP_ADDED, botLevel, queueType, botLevel, queueType);
+            sLog.Out(LOG_BG, LOG_LVL_BASIC, "[PlayerBotMgr] Adding temporary level %u alliance battlebot to bg queue %u.", botLevel, queueType);
+        }
+        else
+        {
+            sWorld.SendWorldTextToBGAndQueue(LANG_ALLIANCE_BATTLEBOT_ADDED, botLevel, queueType, botLevel, queueType);
+            sLog.Out(LOG_BG, LOG_LVL_BASIC, "[PlayerBotMgr] Adding level %u alliance battlebot to bg queue %u.", botLevel, queueType);
+        }
     }
     else
     {
-        sWorld.SendWorldTextToBGAndQueue(LANG_HORDE_BATTLEBOT_ADDED, botLevel, queueType, botLevel, queueType);
-        sLog.Out(LOG_BG, LOG_LVL_BASIC, "[PlayerBotMgr] Adding level %u horde battlebot to bg queue %u.", botLevel, queueType);
+        if (temporary)
+        {
+            sWorld.SendWorldTextToBGAndQueue(LANG_HORDE_BATTLEBOT_TEMP_ADDED, botLevel, queueType, botLevel, queueType);
+            sLog.Out(LOG_BG, LOG_LVL_BASIC, "[PlayerBotMgr] Adding temporary level %u horde battlebot to bg queue %u.", botLevel, queueType);
+        }
+        else
+        {
+            sWorld.SendWorldTextToBGAndQueue(LANG_HORDE_BATTLEBOT_ADDED, botLevel, queueType, botLevel, queueType);
+            sLog.Out(LOG_BG, LOG_LVL_BASIC, "[PlayerBotMgr] Adding level %u horde battlebot to bg queue %u.", botLevel, queueType);
+        }
     }
 }
 
@@ -924,6 +949,7 @@ bool ChatHandler::HandlePartyBotAddCommand(char* args)
         SendSysMessage("New party bot added.");
     else
     {
+        delete ai;
         SendSysMessage("Error spawning bot.");
         SetSentErrorMessage(true);
         return false;
@@ -963,6 +989,7 @@ bool ChatHandler::HandlePartyBotCloneCommand(char* args)
         SendSysMessage("New party bot added.");
     else
     {
+        delete ai;
         SendSysMessage("Error spawning bot.");
         SetSentErrorMessage(true);
         return false;
@@ -1211,6 +1238,87 @@ bool ChatHandler::HandlePartyBotAoECommand(char* args)
     return true;
 }
 
+bool ChatHandler::HandlePartyBotStartCastingCommand(char * args)
+{
+    return HandlePartyBotToggleCastingCommand(true);
+}
+
+bool ChatHandler::HandlePartyBotStopCastingCommand(char * args)
+{
+    return HandlePartyBotToggleCastingCommand(false);
+}
+
+bool ChatHandler::HandlePartyBotToggleCastingCommand(bool allowCasting)
+{
+    Player* pPlayer = GetSession()->GetPlayer();
+    Player* pTarget = GetSelectedPlayer();
+
+    if (pTarget && (pTarget != pPlayer))
+    {
+        if (pTarget->AI())
+        {
+            if (PartyBotAI* pAI = dynamic_cast<PartyBotAI*>(pTarget->AI()))
+            {
+                if (allowCasting)
+                {
+                    pAI->m_preventCasting = false;
+                    PSendSysMessage("%s will be allowed to cast spells.", pTarget->GetName());
+                }
+                else
+                {
+                    pAI->m_preventCasting = true;
+                    pTarget->InterruptNonMeleeSpells(false);
+                    PSendSysMessage("%s will no longer cast spells.", pTarget->GetName());
+                }
+                return true;
+            }
+        }
+        SendSysMessage("Target is not a party bot.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    Group* pGroup = pPlayer->GetGroup();
+    if (!pGroup)
+    {
+        SendSysMessage("You are not in a group.");
+        SetSentErrorMessage(true);
+        return false;
+    }
+
+    for (GroupReference* itr = pGroup->GetFirstMember(); itr != nullptr; itr = itr->next())
+    {
+        if (Player* pMember = itr->getSource())
+        {
+            if (pMember == pPlayer)
+                continue;
+
+            if (pMember->AI())
+            {
+                if (PartyBotAI* pAI = dynamic_cast<PartyBotAI*>(pMember->AI()))
+                {
+                    if (allowCasting)
+                    {
+                        pAI->m_preventCasting = false;
+                    }
+                    else
+                    {
+                        pAI->m_preventCasting = true;
+                        pTarget->InterruptNonMeleeSpells(false);
+                    }
+                }
+            }
+        }
+    }
+
+    if (allowCasting)
+        SendSysMessage("All bots are now allowed to cast spells again.");
+    else
+        SendSysMessage("All bots are now forbidden from casting spells.");
+
+    return true;
+}
+
 static std::map<std::string, RaidTargetIcon> raidTargetIcons =
 {
     { "star",     RAID_TARGET_ICON_STAR     },
@@ -1406,7 +1514,7 @@ bool ChatHandler::HandlePartyBotClearMarksCommand(char* args)
 
 bool HandlePartyBotComeToMeHelper(Player* pBot, Player* pPlayer)
 {
-    if (pBot->AI() && pBot->IsAlive() && pBot->IsInMap(pPlayer) && !pBot->HasUnitState(UNIT_STAT_NO_FREE_MOVE))
+    if (pBot->AI() && pBot->IsAlive() && pBot->IsInMap(pPlayer) && !pBot->HasUnitState(UNIT_STATE_NO_FREE_MOVE))
     {
         if (PartyBotAI* pAI = dynamic_cast<PartyBotAI*>(pBot->AI()))
         {
@@ -1779,6 +1887,7 @@ bool ChatHandler::HandleBattleBotAddCommand(char* args, uint8 bg)
 
     Team botTeam = HORDE;
     uint32 botLevel = sWorld.getConfig(CONFIG_UINT32_MAX_PLAYER_LEVEL);
+    bool isTemporary = false;
     std::string option;
     if (char* arg1 = ExtractArg(&args))
     {
@@ -1794,10 +1903,18 @@ bool ChatHandler::HandleBattleBotAddCommand(char* args, uint8 bg)
             return false;
         }
 
+        
         ExtractUInt32(&args, botLevel);
+
+        
+        if (char* tempStr = ExtractArg(&args))
+        {
+            if (strcmp(tempStr, "temp") == 0)
+                isTemporary = true;
+        }
     }
 
-    sPlayerBotMgr.AddBattleBot(BattleGroundQueueTypeId(bg), botTeam, botLevel, false);
+    sPlayerBotMgr.AddBattleBot(BattleGroundQueueTypeId(bg), botTeam, botLevel, isTemporary);
     return true;
 }
 

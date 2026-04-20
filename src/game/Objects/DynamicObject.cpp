@@ -107,7 +107,7 @@ bool DynamicObject::Create(uint32 guidlow, WorldObject* caster, uint32 spellId, 
     SpellEntry const* spellProto = sSpellMgr.GetSpellEntry(spellId);
     if (!spellProto)
     {
-        sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "DynamicObject (spell %u) not created. Spell not exist!", spellId, GetPositionX(), GetPositionY());
+        sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "DynamicObject (spell %u) not created. Spell not exist! Position: X: %f, Y: %f", spellId, GetPositionX(), GetPositionY());
         return false;
     }
 
@@ -179,7 +179,7 @@ void DynamicObject::Update(uint32 update_diff, uint32 p_time)
         return;
     }
 
-    if (_deleted)
+    if (m_deleted)
         return;
 
     // If this object is from the current channeled spell, do not delete it. Otherwise

@@ -15,6 +15,8 @@
 */
 
 #include "Anticheat.h"
+#include "IO/Multithreading/CreateThread.h"
+#include "Log.h"
 
 AnticheatManager* AnticheatManager::instance()
 {
@@ -26,8 +28,6 @@ AnticheatManager* GetAnticheatLib()
 {
     return AnticheatManager::instance();
 }
-
-#ifdef USE_ANTICHEAT
 
 #include "World.h"
 #include "WorldSession.h"
@@ -51,14 +51,16 @@ AnticheatManager::~AnticheatManager()
 
 void AnticheatManager::LoadAnticheatData()
 {
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_5_1
     sLog.Out(LOG_ANTICHEAT, LOG_LVL_MINIMAL, "");
     sLog.Out(LOG_ANTICHEAT, LOG_LVL_MINIMAL, "Loading warden checks...");
     sWardenScanMgr.LoadFromDB();
     Warden::LoadScriptedScans();
-    
+
     sLog.Out(LOG_ANTICHEAT, LOG_LVL_MINIMAL, "");
     sLog.Out(LOG_ANTICHEAT, LOG_LVL_MINIMAL, "Loading warden modules...");
     sWardenModuleMgr;
+#endif
 }
 
 MovementAnticheat* AnticheatManager::CreateAnticheatFor(Player* player)
@@ -70,6 +72,7 @@ MovementAnticheat* AnticheatManager::CreateAnticheatFor(Player* player)
 
 Warden* AnticheatManager::CreateWardenForInternal(WorldSession* client, BigNumber* K)
 {
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_5_1
     if ((client->GetSecurity() != SEC_PLAYER) &&
         sWorld.getConfig(CONFIG_BOOL_AC_WARDEN_PLAYERS_ONLY))
         return nullptr;
@@ -80,6 +83,7 @@ Warden* AnticheatManager::CreateWardenForInternal(WorldSession* client, BigNumbe
         return new WardenMac(client, *K);
     else if (os == CLIENT_OS_WIN && sWorld.getConfig(CONFIG_BOOL_AC_WARDEN_WIN_ENABLED))
         return new WardenWin(client, *K);
+#endif
 
     return nullptr;
 }
@@ -95,7 +99,7 @@ Warden* AnticheatManager::CreateWardenFor(WorldSession* client, BigNumber* K)
 
 void AnticheatManager::StartWardenUpdateThread()
 {
-   m_wardenUpdateThread = std::thread(&AnticheatManager::UpdateWardenSessions, this);
+   m_wardenUpdateThread = IO::Multithreading::CreateThread("WardenSessions", [this]() { UpdateWardenSessions(); });
 }
 
 void AnticheatManager::StopWardenUpdateThread()
@@ -179,4 +183,3 @@ void AnticheatManager::RemoveWardenSession(Warden* warden)
     m_wardenSessionsToRemove.push_back(warden);
 }
 
-#endif

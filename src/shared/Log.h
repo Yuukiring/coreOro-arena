@@ -143,6 +143,8 @@ enum LogType
     LOG_GM_CRITICAL,
     LOG_ANTICHEAT,
     LOG_SCRIPTS,
+    LOG_MOVEMENT,
+    LOG_NETWORK,
     LOG_TYPE_MAX
 };
 
@@ -160,7 +162,7 @@ class Log : public MaNGOS::Singleton<Log, MaNGOS::ClassLevelLockable<Log, std::m
                 fclose(logFile);
                 logFile = nullptr;
             }
-        } 
+        }
     }
     public:
         void OpenWorldLogFiles();

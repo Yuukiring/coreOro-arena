@@ -36,6 +36,7 @@
 #include "Formulas.h"
 #include "GridNotifiersImpl.h"
 #include "Chat.h"
+#include "ScriptMgr.h"
 
 namespace MaNGOS
 {
@@ -690,7 +691,7 @@ void BattleGround::EndBattleGround(Team winner)
         if (team == winner)
             RewardMark(pPlayer, true);
         // World of Warcraft Client Patch 1.8.4 (2005-12-06)
-        // - Battles must now last at least ten minutes after the start of the 
+        // - Battles must now last at least ten minutes after the start of the
         //   battle in order for the losing team to receive a Mark of honor.
         else if (GetStartTime() > 10 * MINUTE * IN_MILLISECONDS)
             RewardMark(pPlayer, false);
@@ -698,6 +699,10 @@ void BattleGround::EndBattleGround(Team winner)
         pPlayer->CombatStopWithPets(true);
 
         BlockMovement(pPlayer);
+
+        // handler removed in 1.9
+        data.Initialize(team == winner ? SMSG_BATTLEFIELD_WIN : SMSG_BATTLEFIELD_LOSE, 0);
+        pPlayer->GetSession()->SendPacket(&data);
 
         // Send final scoreboard
         pPlayer->GetSession()->SendPacket(&m_finalScore);
@@ -757,9 +762,10 @@ uint32 BattleGround::GetBonusHonorFromKill(uint32 kills) const
     return kills * (uint32)MaNGOS::Honor::GetHonorGain(GetMaxLevel(), GetMaxLevel(), 1);
 }
 
-float BattleGround::GetHonorModifier() {
+float BattleGround::GetHonorModifier() const
+{
     // If the game ends in under one hour, less Bonus Honor will be earned from control of mines, graveyards and for the General kill (win).
-    float elapsed = (float)GetStartTime() / IN_MILLISECONDS / HOUR;
+    float const elapsed = (float)GetStartTime() / (float)IN_MILLISECONDS / (float)HOUR;
     return elapsed < 1.0f ? pow(60, elapsed - 1) : 1.0f;
 }
 
@@ -784,9 +790,9 @@ void BattleGround::RewardMark(Player* pPlayer, bool winner)
         return;
 
     if (winner)
-        RewardSpellCast(pPlayer, pPlayer->GetTeamId() ? GetHordeWinSpell() : GetAllianceWinSpell());
+        RewardSpellCast(pPlayer, pPlayer->GetTeamId() == TEAM_HORDE ? GetHordeWinSpell() : GetAllianceWinSpell());
     else
-        RewardSpellCast(pPlayer, pPlayer->GetTeamId() ? GetHordeLoseSpell() : GetAllianceLoseSpell());
+        RewardSpellCast(pPlayer, pPlayer->GetTeamId() == TEAM_HORDE ? GetHordeLoseSpell() : GetAllianceLoseSpell());
 }
 
 void BattleGround::RewardSpellCast(Player* pPlayer, uint32 spellId)
@@ -1075,7 +1081,11 @@ void BattleGround::AddOrSetPlayerToCorrectBgGroup(Player* pPlayer, ObjectGuid pl
     {
         group = new Group;
         SetBgRaid(team, group);
-        group->Create(playerGuid, pPlayer->GetName());
+        if (!group->Create(playerGuid, pPlayer->GetName()))
+        {
+            SetBgRaid(team, nullptr);
+            delete group;
+        }
     }
 }
 
@@ -1194,7 +1204,7 @@ void BattleGround::DecreaseInvitedCount(Team team)
     }
 }
 void BattleGround::IncreaseInvitedCount(Team team)
-{ 
+{
     switch (team)
     {
         case ALLIANCE:
@@ -1278,7 +1288,7 @@ bool BattleGround::AddObject(uint32 type, uint32 entry, float x, float y, float 
         delete go;
         return false;
     }
-    
+
     // add to world, so it can be later looked up from HashMapHolder
     go->AddToWorld();
     m_bgObjects[type] = go->GetObjectGuid();
@@ -1539,7 +1549,9 @@ void BattleGround::SpawnBGObject(ObjectGuid guid, uint32 respawnTime)
         if (obj->getLootState() == GO_JUST_DEACTIVATED)
             obj->SetLootState(GO_READY);
 
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_5_1
         if (obj->GetGOInfo()->type != GAMEOBJECT_TYPE_FLAGSTAND)
+#endif
             obj->SetGoState(GO_STATE_READY);
 
         obj->SetRespawnTime(respawnTime);
@@ -1553,7 +1565,9 @@ void BattleGround::SpawnBGObject(ObjectGuid guid, uint32 respawnTime)
     {
         if (obj)
         {
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_5_1
             if (obj->GetGOInfo()->type != GAMEOBJECT_TYPE_FLAGSTAND)
+#endif
                 obj->SetGoState(GO_STATE_ACTIVE_ALTERNATIVE);
 
             obj->SetRespawnTime(respawnTime);
@@ -1687,9 +1701,8 @@ important notice:
 buffs aren't spawned/despawned when players captures anything
 buffs are in their positions when battleground starts
 */
-void BattleGround::HandleTriggerBuff(ObjectGuid goGuid)
+void BattleGround::HandleTriggerBuff(GameObject* obj)
 {
-    GameObject* obj = GetBgMap()->GetGameObject(goGuid);
     if (!obj || obj->GetGoType() != GAMEOBJECT_TYPE_TRAP || !obj->isSpawned())
         return;
 
@@ -1704,12 +1717,12 @@ void BattleGround::HandleTriggerBuff(ObjectGuid goGuid)
     // change buff type, when buff is used:
     // TODO this can be done when poolsystem works for instances
     int32 index = m_bgObjects.size() - 1;
-    while (index >= 0 && m_bgObjects[index] != goGuid)
+    while (index >= 0 && m_bgObjects[index] != obj->GetObjectGuid())
         index--;
     if (index < 0)
     {
         sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "BattleGround (Type: %u) has buff trigger %s GOType: %u but it hasn't that object in its internal data",
-                      GetTypeID(), goGuid.GetString().c_str(), obj->GetGoType());
+                      GetTypeID(), obj->GetGuidStr().c_str(), obj->GetGoType());
         return;
     }
 

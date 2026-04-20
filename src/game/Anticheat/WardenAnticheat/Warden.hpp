@@ -30,7 +30,7 @@
 #include "Common.h"
 #include "ByteBuffer.h"
 #include "ClientDefines.h"
-#include "Auth/ARC4.h"
+#include "Crypto/Encryption/RC4.h"
 
 #include <vector>
 #include <memory>
@@ -76,8 +76,8 @@ class Warden
         // true when we have sent a module to the client and are waiting for a result
         bool m_moduleSendPending;
 
-        ARC4 m_inputCrypto;
-        ARC4 m_outputCrypto;
+        RC4 m_inputCrypto;
+        RC4 m_outputCrypto;
 
         void EncryptData(uint8* buffer, size_t size);
         void DecryptData(uint8* buffer, size_t size);
@@ -169,7 +169,7 @@ class Warden
 
         static void LoadScriptedScans();
 
-        void HandlePacket(WorldPacket& recvData);
+        void HandlePacket(ByteBuffer recvData);
 
         bool IsUsingMaiev() const { return m_maiev; }
         WardenModule const* GetModule() const { return m_module; }
@@ -181,10 +181,10 @@ class Warden
         virtual void SetCharEnumPacket(WorldPacket&& packet) = 0;
 
         virtual void GetPlayerInfo(std::string& clock, std::string& fingerprint, std::string& hypervisors,
-            std::string& endscene, std::string& proxifier) const = 0;
+            std::string& renderer, std::string& proxifier) const = 0;
 
-        std::vector<WorldPacket> m_packetQueue;
-        std::mutex m_packetQueueMutex;
+        std::queue<std::vector<uint8>> m_packetDataQueue;
+        std::mutex m_packetDataQueueMutex;
 
         // used by maiev string hash check
         mutable std::string m_hashString;

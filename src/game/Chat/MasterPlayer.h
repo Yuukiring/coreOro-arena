@@ -132,26 +132,26 @@ public:
     std::string afkMsg;
     std::string dndMsg;
     uint8 m_chatTag;
-    time_t m_speakTime;
-    uint32 m_speakCount;
+    time_t m_speakTime = 0;
+    uint32 m_speakCount = 0;
     typedef std::list<Channel*> JoinedChannelsList;
     JoinedChannelsList m_channels;
     // GM system variables
     uint8 m_gmInvisibilityLevel;
     uint32 m_ExtraFlags;
-    std::set<ObjectGuid> m_allowedWhispers;
+    std::unordered_set<ObjectGuid> m_allowedWhispers;
 
     // TODO: Group ?
 
 protected:
 
-    PlayerSocial* m_social;
+    PlayerSocial* m_social = nullptr;
     ActionButtonList m_actionButtons;
     WorldSession* m_session;
 
-    bool m_mailsUpdated;
-    uint8 unReadMails;
-    time_t m_nextMailDelivereTime;
+    bool m_mailsUpdated = false;
+    uint8 unReadMails = 0;
+    time_t m_nextMailDelivereTime = 0;
     PlayerMails m_mail;
     ItemMap mMitems;
 };
